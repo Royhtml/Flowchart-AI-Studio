@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Marching dashes on animated connectors */
+  .stroke-dash-animated {
+    animation: strokeDashMove 1s linear infinite;
+  }
+
+  /* Rapid glowing electric flow pulse during workflow execution */
+  .pulse-flow-animation {
+    animation: pulseFlowMove 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  /* Dark themed sleek scrollbars */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.6);
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(51, 65, 85, 0.8);
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.9);
+  }
+
+  /* Hide scrollbars while allowing smooth horizontal & vertical scrolling */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none !important;
+    scrollbar-width: none !important;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Global scrollbar-free fallback */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+@keyframes strokeDashMove {
+  from {
+    stroke-dashoffset: 20;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pulseFlowMove {
+  0% {
+    stroke-dashoffset: 200;
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: -200;
+    opacity: 0.2;
+  }
+}

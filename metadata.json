@@ -1,0 +1,7 @@
+{
+  "name": "Interactive Flowchart Studio",
+  "description": "Interactive flowchart editor with Draw.io style canvas zoom, 8-point node resizing, layer shifting & Z-order management, whole-diagram scaling, auto connectors, and real-time simulation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
