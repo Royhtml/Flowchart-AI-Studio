@@ -8,7 +8,9 @@ import {
   Gauge,
   CheckCircle2,
   AlertTriangle,
-  GitBranch
+  GitBranch,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { SimulationState, FlowNode } from '../types';
 
@@ -24,6 +26,9 @@ interface SimulationControllerProps {
   currentNode: FlowNode | null;
   decisionBranches: Array<{ connectorId: string; label: string; toNodeLabel: string }> | null;
   onSelectDecisionBranch: (connectorId: string) => void;
+  isTTSEnabled?: boolean;
+  onToggleTTS?: () => void;
+  onTestTTS?: () => void;
 }
 
 export const SimulationController: React.FC<SimulationControllerProps> = ({
@@ -38,6 +43,9 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({
   currentNode,
   decisionBranches,
   onSelectDecisionBranch,
+  isTTSEnabled = true,
+  onToggleTTS,
+  onTestTTS,
 }) => {
   const isRunning = simulationState.status === 'running';
   
@@ -229,6 +237,46 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({
             </span>
           )}
         </button>
+
+        {/* Female Voice TTS Narration Toggle */}
+        {onToggleTTS && (
+          <div className="flex items-center gap-1 pl-2 border-l border-slate-800">
+            <button
+              id="btn-female-tts"
+              onClick={onToggleTTS}
+              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all border ${
+                isTTSEnabled
+                  ? 'bg-pink-950/80 text-pink-300 border-pink-500/50 shadow-md shadow-pink-950/40 ring-1 ring-pink-500/30'
+                  : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-400 border-slate-700'
+              }`}
+              title={
+                isTTSEnabled
+                  ? 'TTS Suara Perempuan Aktif (Klik untuk nonaktifkan narasi)'
+                  : 'Aktifkan Narasi Suara Perempuan saat Animasi'
+              }
+            >
+              {isTTSEnabled ? (
+                <Volume2 className="w-3.5 h-3.5 text-pink-400 animate-pulse" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5 text-slate-500" />
+              )}
+              <span className="hidden md:inline font-medium">TTS Perempuan</span>
+              {isTTSEnabled && (
+                <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
+              )}
+            </button>
+            {onTestTTS && isTTSEnabled && (
+              <button
+                type="button"
+                onClick={onTestTTS}
+                className="px-1.5 py-1 rounded-lg bg-pink-950/40 hover:bg-pink-900/60 text-pink-300 border border-pink-500/30 text-[10px] transition-colors"
+                title="Coba contoh suara narator perempuan"
+              >
+                Tes
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

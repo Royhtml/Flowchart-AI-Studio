@@ -20,34 +20,68 @@ import {
 } from 'lucide-react';
 import { LLMConfig, FlowNode, FlowConnector } from '../types';
 
-// Streaming Text Component with TypeWriter Effect
-const StreamingText: React.FC<{ text: string }> = ({ text }) => {
-  const [displayedText, setDisplayedText] = useState('');
-  const [currentIndex, setCurrentIndex] = useState(0);
+// Fast Gemini-style running text effect with glowing beam cursor
+const GeminiTypingText: React.FC<{
+  text: string;
+  isLatest: boolean;
+}> = ({ text, isLatest }) => {
+  const [displayedChars, setDisplayedChars] = useState(isLatest ? 0 : text.length);
+  const [completed, setCompleted] = useState(!isLatest);
 
   useEffect(() => {
-    if (currentIndex < text.length) {
-      const timeout = setTimeout(() => {
-        setDisplayedText(prev => prev + text[currentIndex]);
-        setCurrentIndex(prev => prev + 1);
-      }, 15); // Speed: 15ms per character (fast like ChatGPT)
-      
-      return () => clearTimeout(timeout);
+    if (!isLatest) {
+      setDisplayedChars(text.length);
+      setCompleted(true);
+      return;
     }
-  }, [currentIndex, text]);
 
-  useEffect(() => {
-    setDisplayedText('');
-    setCurrentIndex(0);
-  }, [text]);
+    setDisplayedChars(0);
+    setCompleted(false);
+
+    // Fast streaming running text (steps by 2-3 chars every 10ms like Gemini / ChatGPT)
+    const interval = setInterval(() => {
+      setDisplayedChars((prev) => {
+        const next = Math.min(prev + 2, text.length);
+        if (next >= text.length) {
+          clearInterval(interval);
+          setCompleted(true);
+        }
+        return next;
+      });
+    }, 10);
+
+    return () => clearInterval(interval);
+  }, [text, isLatest]);
 
   return (
-    <>
-      {displayedText}
-      {currentIndex < text.length && (
-        <span className="inline-block w-1 h-3 bg-cyan-400 animate-pulse ml-0.5" />
+    <div className="relative">
+      <div className="text-xs text-slate-100 whitespace-pre-wrap leading-relaxed font-sans">
+        {text.slice(0, displayedChars)}
+        {!completed && (
+          <span
+            className="inline-block w-1.5 h-3.5 ml-1 rounded-[1px] bg-gradient-to-b from-cyan-400 to-blue-500 shadow-[0_0_8px_rgba(6,182,212,0.9)] animate-pulse align-middle"
+          />
+        )}
+      </div>
+      {!completed && (
+        <div className="mt-1 flex items-center justify-between text-[10px] text-cyan-400/90 font-mono select-none">
+          <span className="flex items-center gap-1">
+            <Sparkles className="w-3 h-3 text-cyan-400 animate-spin" />
+            Gemini Fast Streaming...
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setDisplayedChars(text.length);
+              setCompleted(true);
+            }}
+            className="text-[10px] text-slate-400 hover:text-cyan-300 underline cursor-pointer"
+          >
+            Lewati animasi
+          </button>
+        </div>
       )}
-    </>
+    </div>
   );
 };
 
@@ -72,10 +106,11 @@ interface CanvasAIChatBarProps {
 }
 
 const QUICK_PROMPTS = [
-  'User Registration & Email OTP Verification',
-  'Employee Leave Approval Workflow',
-  'E-Commerce Checkout & Payment Gateway',
-  'Customer Support Ticket Resolution Lifecycle',
+  'Apa fungsi simbol Decision?',
+  'Buatkan flowchart Alur Login & OTP',
+  'Perbedaan Terminator vs Process?',
+  'Buatkan alur Checkout & Pembayaran',
+  'Prinsip dasar standar flowchart',
 ];
 
 export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
@@ -98,6 +133,14 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll chat to bottom on new messages
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages, isGenerating]);
 
   // --- Drag logic ---
   const barRef = useRef<HTMLDivElement>(null);
@@ -280,79 +323,98 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
           <div className="p-3 space-y-2.5">
             {/* Chat Messages History */}
             {chatMessages.length > 0 && (
-              <div className="max-h-60 overflow-y-auto space-y-2 mb-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">
-                {chatMessages.slice(-5).map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`p-2.5 rounded-lg border ${
-                      msg.role === 'user'
-                        ? 'bg-slate-800/80 border-slate-700 ml-8'
-                        : 'bg-cyan-950/40 border-cyan-800/40 mr-8'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                        {msg.role === 'user' ? 'You' : 'AI Assistant'}
-                      </span>
-                      <span className="text-[9px] text-slate-500">
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-200 whitespace-pre-wrap">{msg.content}</div>
-                    
-                    {/* Flowchart Code Block dengan Copy & Apply */}
-                    {msg.flowchartCode && (
-                      <div className="mt-2 bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden">
-                        <div className="px-2 py-1 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
-                          <span className="text-[10px] font-mono text-cyan-400">FlowScript DSL</span>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => handleCopyCode(msg.flowchartCode!, msg.id)}
-                              className="p-1 text-slate-400 hover:text-cyan-300 transition-colors"
-                              title="Copy code"
-                            >
-                              {copiedId === msg.id ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                            {onApplyFlowchart && (
-                              <button
-                                onClick={() => handleApplyToCanvas(msg.flowchartCode!)}
-                                className="px-2 py-0.5 text-[10px] font-semibold bg-cyan-600 hover:bg-cyan-500 text-white rounded flex items-center gap-1 transition-colors"
-                                title="Apply to canvas"
-                              >
-                                <Download className="w-3 h-3" />
-                                Apply
-                              </button>
-                            )}
-                          </div>
+              <div
+                ref={chatScrollRef}
+                className="max-h-60 overflow-y-auto space-y-2 mb-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900"
+              >
+                {chatMessages.slice(-6).map((msg, idx, arr) => {
+                  const isLatest = idx === arr.length - 1 && msg.role === 'assistant';
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`p-2.5 rounded-xl border transition-all ${
+                        msg.role === 'user'
+                          ? 'bg-slate-800/90 border-slate-700 ml-8'
+                          : 'bg-cyan-950/40 border-cyan-700/50 mr-6 shadow-sm shadow-cyan-950/40'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <div className="flex items-center gap-1.5">
+                          {msg.role === 'assistant' ? (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <span className="text-[10px] font-bold text-cyan-300 uppercase tracking-wider">
+                                Flow AI
+                              </span>
+                              <span className="text-[9px] px-1.5 py-0.2 bg-cyan-900/60 border border-cyan-700/50 text-cyan-200 rounded-full font-mono">
+                                Gemini Mode
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-slate-300 uppercase tracking-wider">
+                              You
+                            </span>
+                          )}
                         </div>
-                        <pre className="p-2 text-[10px] text-slate-300 overflow-x-auto max-h-40 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">
-                          <code>{msg.flowchartCode}</code>
-                        </pre>
+                        <span className="text-[9px] text-slate-400 font-mono">
+                          {new Date(msg.timestamp).toLocaleTimeString()}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
-                
-                {/* Streaming AI Response */}
-                {isStreaming && (
-                  <div className="p-2.5 rounded-lg border bg-cyan-950/40 border-cyan-800/40 mr-8 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                        AI Assistant
-                      </span>
-                      <Loader2 className="w-3 h-3 text-cyan-400 animate-spin" />
+
+                      {msg.role === 'assistant' ? (
+                        <GeminiTypingText text={msg.content} isLatest={isLatest} />
+                      ) : (
+                        <div className="text-xs text-slate-200 whitespace-pre-wrap">{msg.content}</div>
+                      )}
+
+                      {/* Flowchart Code Block dengan Copy & Apply */}
+                      {msg.flowchartCode && (
+                        <div className="mt-2.5 bg-slate-950/90 border border-cyan-900/50 rounded-lg overflow-hidden shadow-inner">
+                          <div className="px-2.5 py-1 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
+                            <span className="text-[10px] font-mono text-cyan-400 flex items-center gap-1">
+                              <Code2 className="w-3 h-3" />
+                              FlowScript DSL
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(msg.flowchartCode!, msg.id)}
+                                className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded transition-colors flex items-center gap-1"
+                                title="Salin kode"
+                              >
+                                {copiedId === msg.id ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span className="text-emerald-400">Tersalin</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin</span>
+                                  </>
+                                )}
+                              </button>
+                              {onApplyFlowchart && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleApplyToCanvas(msg.flowchartCode!)}
+                                  className="px-2.5 py-0.5 text-[10px] font-semibold bg-cyan-600 hover:bg-cyan-500 text-white rounded flex items-center gap-1 transition-colors shadow-sm shadow-cyan-900/40"
+                                  title="Terapkan ke canvas"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Terapkan
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <pre className="p-2 text-[10px] text-slate-300 overflow-x-auto max-h-36 font-mono scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">
+                            <code>{msg.flowchartCode}</code>
+                          </pre>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-xs text-slate-200 whitespace-pre-wrap">
-                      {chatMessages[chatMessages.length - 1]?.role === 'assistant' 
-                        ? <StreamingText text={chatMessages[chatMessages.length - 1].content} />
-                        : 'Thinking...'}
-                    </div>
-                  </div>
-                )}
+                  );
+                })}
               </div>
             )}
 

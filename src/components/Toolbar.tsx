@@ -53,7 +53,8 @@ interface ToolbarProps {
   canvasState: CanvasState;
   onUpdateCanvasState: (updates: Partial<CanvasState>) => void;
   onResetZoom: () => void;
-  onExportPNG: () => void;
+  onExportPNG: (format?: any, transparent?: any, canvasBounds?: any) => void;
+  onOpenExportModal?: () => void;
   onExportJSON: () => void;
   onImportJSON: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onOpenTemplates: () => void;
@@ -80,6 +81,8 @@ interface ToolbarProps {
   onOpenHistory?: () => void;
   isHistoryOpen?: boolean;
   historyCount?: number;
+  isDetailAIOpen?: boolean;
+  onOpenDetailAI?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -93,6 +96,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onUpdateCanvasState,
   onResetZoom,
   onExportPNG,
+  onOpenExportModal,
   onExportJSON,
   onImportJSON,
   onOpenTemplates,
@@ -119,10 +123,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onOpenHistory,
   isHistoryOpen,
   historyCount,
+  isDetailAIOpen,
+  onOpenDetailAI,
 }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState(projectName);
-  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
   const [isAutoLayoutMenuOpen, setIsAutoLayoutMenuOpen] = useState(false);
 
   // Horizontal slide / drag scroll for toolbar
@@ -232,6 +238,87 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </span>
             </button>
           )}
+
+          {/* Project File Menu (JSON Backup, Import, Clear) */}
+          <div className="relative">
+            <button
+              id="btn-project-file-menu"
+              onClick={() => setIsProjectMenuOpen((prev) => !prev)}
+              className={`p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors ${
+                isProjectMenuOpen ? 'bg-slate-800 text-cyan-400' : ''
+              }`}
+              title="File & Project Menu (Backup JSON, Import JSON, Clear Canvas)"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {isProjectMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsProjectMenuOpen(false)}
+                />
+                <div className="absolute left-0 top-full mt-2 w-56 bg-slate-900 border border-slate-700/90 rounded-xl shadow-2xl py-1.5 z-50 backdrop-blur-xl animate-in fade-in slide-in-from-top-1">
+                  <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                    File & Project
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsProjectMenuOpen(false);
+                      onExportJSON();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
+                  >
+                    <div className="p-1 rounded bg-indigo-950 text-indigo-400">
+                      <FileJson className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-100">Backup JSON Project</div>
+                      <div className="text-[10px] text-slate-400">Simpan state diagram lengkap</div>
+                    </div>
+                  </button>
+
+                  <label className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors cursor-pointer">
+                    <div className="p-1 rounded bg-emerald-950 text-emerald-400">
+                      <Upload className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-100">Import JSON Project</div>
+                      <div className="text-[10px] text-slate-400">Buka diagram yang tersimpan</div>
+                    </div>
+                    <input
+                      type="file"
+                      accept=".json,.flow"
+                      onChange={(e) => {
+                        setIsProjectMenuOpen(false);
+                        onImportJSON(e);
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <div className="my-1 border-t border-slate-800" />
+
+                  <button
+                    onClick={() => {
+                      setIsProjectMenuOpen(false);
+                      onClearCanvas();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-rose-400 hover:bg-rose-950/40 flex items-center gap-2.5 transition-colors"
+                  >
+                    <div className="p-1 rounded bg-rose-950 text-rose-400">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <div className="font-medium">Clear Canvas</div>
+                      <div className="text-[10px] text-rose-400/80">Hapus semua node dan konektor</div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Undo / Redo */}
@@ -461,7 +548,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             id="btn-toggle-right-sidebar"
             onClick={onToggleRightSidebar}
             className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
-              isRightSidebarOpen
+              isRightSidebarOpen && !isDetailAIOpen
                 ? 'bg-cyan-950/90 border border-cyan-500/60 text-cyan-300 ring-1 ring-cyan-500/30'
                 : 'bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700 text-slate-200 hover:text-cyan-300'
             }`}
@@ -469,6 +556,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <Sliders className="w-3.5 h-3.5 text-cyan-400" />
             <span className="hidden md:inline">Inspector</span>
+          </button>
+        )}
+
+        {/* Detail AI Canvas Project Consultant Button */}
+        {onOpenDetailAI && (
+          <button
+            id="btn-detail-ai-toolbar"
+            onClick={onOpenDetailAI}
+            className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
+              isDetailAIOpen
+                ? 'bg-purple-950/90 border border-purple-500/60 text-purple-300 ring-1 ring-purple-500/30'
+                : 'bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700 text-slate-200 hover:text-purple-300'
+            }`}
+            title="Detail AI: Analisis & Pembahasan Khusus Proyek Canvas Ini"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden md:inline">Detail AI</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
           </button>
         )}
 
@@ -531,165 +636,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           )}
         </button>
 
-        {/* Export PNG Dropdown Button */}
-        <div className="relative">
-          <button
-            id="btn-export-main"
-            onClick={() => setShowExportMenu(!showExportMenu)}
-            className="px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] shrink-0"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span className="hidden xs:inline">Export PNG</span>
-            <span className="xs:hidden">Export</span>
-            <ChevronDown className="w-3 h-3 ml-0.5 opacity-80" />
-          </button>
-
-          {showExportMenu && (
-            <div
-              className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-700/90 rounded-xl shadow-2xl py-1.5 z-50 backdrop-blur-xl animate-in fade-in slide-in-from-top-1"
-              onMouseLeave={() => setShowExportMenu(false)}
-            >
-              <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                Export & Project Options
-              </div>
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onExportPNG(false, 'png');
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-cyan-950 text-cyan-400">
-                  <ImageIcon className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">PNG Image (Dark HD)</div>
-                  <div className="text-[10px] text-slate-400">High-res 2x with dark background</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onExportPNG(true, 'png');
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-blue-950 text-blue-400">
-                  <ImageIcon className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">Transparent PNG</div>
-                  <div className="text-[10px] text-slate-400">Without background for presentations</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onExportPNG(false, 'jpg');
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-amber-950 text-amber-400">
-                  <ImageIcon className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">JPG Image</div>
-                  <div className="text-[10px] text-slate-400">Compressed format, smaller file size</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onExportPNG(false, 'pdf');
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-rose-950 text-rose-400">
-                  <FileJson className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">PDF Document</div>
-                  <div className="text-[10px] text-slate-400">Printable PDF format for documentation</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onExportPNG(false, 'svg');
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-violet-950 text-violet-400">
-                  <ImageIcon className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">SVG Vector</div>
-                  <div className="text-[10px] text-slate-400">Scalable vector graphics, infinite zoom</div>
-                </div>
-              </button>
-
-              <div className="my-1 border-t border-slate-800" />
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onExportJSON();
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-indigo-950 text-indigo-400">
-                  <FileJson className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">Backup JSON Project</div>
-                  <div className="text-[10px] text-slate-400">Save complete diagram state</div>
-                </div>
-              </button>
-
-              <label className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2.5 transition-colors cursor-pointer">
-                <div className="p-1 rounded bg-emerald-950 text-emerald-400">
-                  <Upload className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium text-slate-100">Import JSON Project</div>
-                  <div className="text-[10px] text-slate-400">Load previously saved diagram</div>
-                </div>
-                <input
-                  type="file"
-                  accept=".json,.flow"
-                  onChange={(e) => {
-                    setShowExportMenu(false);
-                    onImportJSON(e);
-                  }}
-                  className="hidden"
-                />
-              </label>
-
-              <div className="my-1 border-t border-slate-800" />
-
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  onClearCanvas();
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-rose-400 hover:bg-rose-950/40 flex items-center gap-2.5 transition-colors"
-              >
-                <div className="p-1 rounded bg-rose-950 text-rose-400">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <div className="font-medium">Clear Canvas</div>
-                  <div className="text-[10px] text-rose-400/80">Delete all nodes and connectors</div>
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
+        {/* Export Pop-up Button */}
+        <button
+          id="btn-export-main"
+          onClick={() => {
+            if (onOpenExportModal) {
+              onOpenExportModal();
+            } else {
+              onExportPNG('png', false, true);
+            }
+          }}
+          title="Buka Pop-up Download & Preview Canvas"
+          className="px-2.5 sm:px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] shrink-0 active:scale-95"
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span className="hidden xs:inline">Export Canvas</span>
+          <span className="xs:hidden">Export</span>
+        </button>
       </div>
     </header>
   );

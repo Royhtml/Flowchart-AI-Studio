@@ -493,7 +493,8 @@ export const FlowCanvas: React.FC<FlowCanvasProps> = ({
       const dy = (e.clientY - draggingNodesState.startY) / canvasState.zoom;
 
       const moves: Array<{ id: string; x: number; y: number }> = [];
-      Object.entries(draggingNodesState.initialPositions).forEach(([id, pos]) => {
+      Object.entries(draggingNodesState.initialPositions).forEach(([id, posVal]) => {
+        const pos = posVal as { x: number; y: number };
         let newX = pos.x + dx;
         let newY = pos.y + dy;
         if (canvasState.snapToGrid) {

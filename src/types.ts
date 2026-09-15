@@ -50,7 +50,7 @@ export interface FlowNode {
   fillColor: string;
   strokeColor: string;
   strokeWidth: number;
-  strokeStyle: 'solid' | 'dashed';
+  strokeStyle: 'solid' | 'dashed' | 'dotted';
   textColor: string;
   fontSize: number;
   fontWeight: 'normal' | 'medium' | 'bold';
@@ -69,12 +69,14 @@ export interface StylePreset {
   fillColor: string;
   strokeColor: string;
   strokeWidth: number;
-  strokeStyle: 'solid' | 'dashed';
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
   textColor: string;
   fontSize: number;
-  fontWeight: 'normal' | 'medium' | 'bold';
-  rounded: number;
-  shadow: 'none' | 'subtle' | 'glow-cyan' | 'glow-emerald' | 'glow-violet' | 'glow-amber';
+  fontWeight?: 'normal' | 'medium' | 'bold';
+  rounded?: number;
+  shadow?: 'none' | 'subtle' | 'glow-cyan' | 'glow-emerald' | 'glow-violet' | 'glow-amber';
+  borderStyle?: 'solid' | 'dashed';
+  roughness?: number;
 }
 
 export interface FlowConnector {
@@ -89,7 +91,7 @@ export interface FlowConnector {
   labelBgColor?: string;
   strokeColor: string;
   strokeWidth: number;
-  strokeStyle: 'solid' | 'dashed';
+  strokeStyle: 'solid' | 'dashed' | 'dotted';
   animated: boolean;
   animationType?: ConnectorAnimation;
   arrowEnd: boolean;
@@ -124,23 +126,6 @@ export interface CanvasState {
   showMinimap: boolean;
   isPanMode?: boolean;
   paper?: PaperConfig;
-}
-
-export interface StylePreset {
-  id: string;
-  name: string;
-  category?: 'curated' | 'custom';
-  fillColor: string;
-  strokeColor: string;
-  strokeWidth: number;
-  strokeStyle?: 'solid' | 'dashed';
-  textColor: string;
-  fontSize: number;
-  fontWeight?: 'normal' | 'medium' | 'bold';
-  rounded?: number;
-  shadow?: 'none' | 'subtle' | 'glow-cyan' | 'glow-emerald' | 'glow-violet' | 'glow-amber';
-  borderStyle?: 'solid' | 'dashed';
-  roughness?: number;
 }
 
 export interface SimulationLog {

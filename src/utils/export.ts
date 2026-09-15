@@ -13,54 +13,78 @@ export interface ExportOptions {
 }
 
 /**
- * High-definition PNG Exporter using Native HTML5 Canvas
+ * Render diagram elements cleanly onto an HTML5 Canvas context
  */
-export async function exportFlowchartToPNG(
+export function renderDiagramToCanvas(
+  canvas: HTMLCanvasElement,
   nodes: FlowNode[],
   connectors: FlowConnector[],
-  options: ExportOptions = {}
-): Promise<void> {
-  const format = options.format || 'png';
-  
-  if (nodes.length === 0) {
-    alert('There are no elements on the canvas to export!');
-    return;
-  }
-
+  options: {
+    transparentBg?: boolean;
+    scale?: number;
+    padding?: number;
+    showGrid?: boolean;
+    minWidth?: number;
+    minHeight?: number;
+  } = {}
+): { width: number; height: number; exportWidth: number; exportHeight: number } {
   const {
-    fileName = `flowchart-${Date.now()}.${format}`,
     transparentBg = false,
-    scale = 2, // 2x for ultra crisp rendering
-    quality = 0.95, // JPG quality
+    scale = 2,
+    padding = 60,
+    showGrid = true,
+    minWidth = 300,
+    minHeight = 200,
   } = options;
 
-  const bounds = getDiagramBounds(nodes);
-  const padding = 60;
-  const exportWidth = bounds.width + padding * 2;
-  const exportHeight = bounds.height + padding * 2;
+  const bounds = getDiagramBounds(nodes.length > 0 ? nodes : [{
+    id: 'placeholder',
+    type: 'process',
+    x: 0,
+    y: 0,
+    width: 200,
+    height: 80,
+    label: 'Empty Canvas',
+    fillColor: '#1e293b',
+    strokeColor: '#475569',
+    strokeWidth: 2,
+    strokeStyle: 'solid',
+    textColor: '#94a3b8',
+    fontSize: 14,
+    fontWeight: 'medium',
+    textAlign: 'center',
+    rounded: 8,
+    shadow: 'none'
+  }]);
 
-  const canvas = document.createElement('canvas');
-  canvas.width = exportWidth * scale;
-  canvas.height = exportHeight * scale;
+  const rawWidth = Math.max(minWidth, bounds.width + padding * 2);
+  const rawHeight = Math.max(minHeight, bounds.height + padding * 2);
+
+  canvas.width = Math.round(rawWidth * scale);
+  canvas.height = Math.round(rawHeight * scale);
+
   const ctx = canvas.getContext('2d');
+  if (!ctx) return { width: canvas.width, height: canvas.height, exportWidth: rawWidth, exportHeight: rawHeight };
 
-  if (!ctx) return;
-
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
   ctx.scale(scale, scale);
 
   // Background
   if (!transparentBg) {
     ctx.fillStyle = '#090d16'; // Deep dark canvas color
-    ctx.fillRect(0, 0, exportWidth, exportHeight);
+    ctx.fillRect(0, 0, rawWidth, rawHeight);
 
-    // Draw subtle grid dots
-    ctx.fillStyle = '#1e293b';
-    const dotSpacing = 24;
-    for (let x = 0; x < exportWidth; x += dotSpacing) {
-      for (let y = 0; y < exportHeight; y += dotSpacing) {
-        ctx.beginPath();
-        ctx.arc(x, y, 1, 0, Math.PI * 2);
-        ctx.fill();
+    if (showGrid) {
+      // Draw subtle grid dots
+      ctx.fillStyle = '#1e293b';
+      const dotSpacing = 24;
+      for (let x = 0; x < rawWidth; x += dotSpacing) {
+        for (let y = 0; y < rawHeight; y += dotSpacing) {
+          ctx.beginPath();
+          ctx.arc(x, y, 1, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
   }
@@ -83,10 +107,12 @@ export async function exportFlowchartToPNG(
     const { path, mid } = getConnectorPath(start, end, conn.fromPort, conn.toPort, conn.type);
 
     ctx.save();
-    ctx.strokeStyle = conn.strokeColor || '#64748b';
+    ctx.strokeStyle = conn.strokeColor || '#38bdf8';
     ctx.lineWidth = conn.strokeWidth || 2;
     if (conn.strokeStyle === 'dashed') {
       ctx.setLineDash([6, 4]);
+    } else if (conn.strokeStyle === 'dotted') {
+      ctx.setLineDash([2, 3]);
     } else {
       ctx.setLineDash([]);
     }
@@ -99,7 +125,7 @@ export async function exportFlowchartToPNG(
 
     // Draw arrow at end
     if (conn.arrowEnd) {
-      drawArrowHead(ctx, end, conn.toPort, conn.strokeColor || '#64748b');
+      drawArrowHead(ctx, end, conn.toPort, conn.strokeColor || '#38bdf8');
     }
 
     // Draw Connector Label if exists
@@ -156,17 +182,84 @@ export async function exportFlowchartToPNG(
   }
 
   ctx.restore();
+  ctx.restore();
+
+  return { width: canvas.width, height: canvas.height, exportWidth: rawWidth, exportHeight: rawHeight };
+}
+
+/**
+ * High-definition PNG Exporter using Native HTML5 Canvas
+ */
+export async function exportFlowchartToPNG(
+  nodes: FlowNode[],
+  connectors: FlowConnector[],
+  options: ExportOptions = {}
+): Promise<void> {
+  const format = options.format || 'png';
+  
+  if (nodes.length === 0) {
+    alert('There are no elements on the canvas to export!');
+    return;
+  }
+
+  const {
+    fileName = `flowchart-${Date.now()}.${format}`,
+    transparentBg = false,
+    scale = 2, // 2x for ultra crisp rendering
+    quality = 0.95, // JPG quality
+  } = options;
+
+  const canvas = document.createElement('canvas');
+  renderDiagramToCanvas(canvas, nodes, connectors, {
+    transparentBg,
+    scale,
+    padding: 60,
+  });
 
   // Export based on format
   if (format === 'jpg' || format === 'jpeg') {
-    // Convert to JPG
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
     downloadDataUrl(dataUrl, fileName);
   } else {
-    // Default PNG
     const dataUrl = canvas.toDataURL('image/png');
     downloadDataUrl(dataUrl, fileName);
   }
+}
+
+/**
+ * Copy Flowchart Image to Clipboard
+ */
+export async function copyFlowchartToClipboard(
+  nodes: FlowNode[],
+  connectors: FlowConnector[],
+  options: ExportOptions = {}
+): Promise<boolean> {
+  if (nodes.length === 0) return false;
+
+  const canvas = document.createElement('canvas');
+  renderDiagramToCanvas(canvas, nodes, connectors, {
+    transparentBg: options.transparentBg ?? false,
+    scale: options.scale ?? 2,
+    padding: 60,
+  });
+
+  return new Promise((resolve) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        resolve(false);
+        return;
+      }
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob }),
+        ]);
+        resolve(true);
+      } catch (err) {
+        console.warn('Clipboard write failed:', err);
+        resolve(false);
+      }
+    }, 'image/png');
+  });
 }
 
 /**
@@ -553,7 +646,8 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
   ctx.beginPath();
 
   switch (type) {
-    case 'start-end': {
+    case 'start-end':
+    case 'terminator': {
       const radius = height / 2;
       ctx.roundRect(x, y, width, height, radius);
       break;
@@ -575,6 +669,7 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
       ctx.closePath();
       break;
     }
+    case 'cylinder':
     case 'database': {
       const rh = 12;
       ctx.ellipse(x + width / 2, y + rh, width / 2, rh, 0, 0, Math.PI * 2);
@@ -589,6 +684,27 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
       ctx.lineTo(x, y + height - rh);
       ctx.ellipse(x + width / 2, y + height - rh, width / 2, rh, 0, 0, Math.PI, false);
       ctx.lineTo(x + width, y + rh);
+      break;
+    }
+    case 'multidocument': {
+      // Secondary background sheet
+      ctx.roundRect(x + 6, y - 6, width - 6, height - 6, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      const wave = 10;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + width - 6, y);
+      ctx.lineTo(x + width - 6, y + height - wave);
+      ctx.bezierCurveTo(
+        x + (width - 6) * 0.75,
+        y + height,
+        x + (width - 6) * 0.25,
+        y + height - wave * 2,
+        x,
+        y + height - wave
+      );
+      ctx.closePath();
       break;
     }
     case 'document': {
@@ -607,7 +723,8 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
       ctx.closePath();
       break;
     }
-    case 'subprocess': {
+    case 'subprocess':
+    case 'predefined-process': {
       ctx.roundRect(x, y, width, height, node.rounded || 6);
       ctx.fill();
       ctx.stroke();
@@ -622,8 +739,60 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
       ctx.stroke();
       return;
     }
-    case 'cloud': {
-      ctx.roundRect(x, y, width, height, 16);
+    case 'hexagon':
+    case 'preparation': {
+      const hx = width / 6;
+      ctx.moveTo(x + hx, y);
+      ctx.lineTo(x + width - hx, y);
+      ctx.lineTo(x + width, y + height / 2);
+      ctx.lineTo(x + width - hx, y + height);
+      ctx.lineTo(x + hx, y + height);
+      ctx.lineTo(x, y + height / 2);
+      ctx.closePath();
+      break;
+    }
+    case 'triangle': {
+      ctx.moveTo(x + width / 2, y);
+      ctx.lineTo(x + width, y + height);
+      ctx.lineTo(x, y + height);
+      ctx.closePath();
+      break;
+    }
+    case 'star': {
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const spikes = 5;
+      const outerR = Math.min(width, height) / 2;
+      const innerR = outerR / 2.2;
+      let rot = (Math.PI / 2) * 3;
+      const step = Math.PI / spikes;
+      ctx.moveTo(cx, cy - outerR);
+      for (let i = 0; i < spikes; i++) {
+        let sx = cx + Math.cos(rot) * outerR;
+        let sy = cy + Math.sin(rot) * outerR;
+        ctx.lineTo(sx, sy);
+        rot += step;
+        sx = cx + Math.cos(rot) * innerR;
+        sy = cy + Math.sin(rot) * innerR;
+        ctx.lineTo(sx, sy);
+        rot += step;
+      }
+      ctx.lineTo(cx, cy - outerR);
+      ctx.closePath();
+      break;
+    }
+    case 'shield': {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + width, y);
+      ctx.lineTo(x + width, y + height * 0.6);
+      ctx.quadraticCurveTo(x + width / 2, y + height * 1.1, x + width / 2, y + height);
+      ctx.quadraticCurveTo(x + width / 2, y + height * 1.1, x, y + height * 0.6);
+      ctx.closePath();
+      break;
+    }
+    case 'cloud':
+    case 'cloud-service': {
+      ctx.roundRect(x, y, width, height, 18);
       break;
     }
     case 'delay': {
@@ -635,6 +804,15 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
       ctx.closePath();
       break;
     }
+    case 'manual-input': {
+      const slant = 14;
+      ctx.moveTo(x, y + slant);
+      ctx.lineTo(x + width, y);
+      ctx.lineTo(x + width, y + height);
+      ctx.lineTo(x, y + height);
+      ctx.closePath();
+      break;
+    }
     case 'note': {
       const fold = 14;
       ctx.moveTo(x, y);
@@ -642,6 +820,29 @@ function drawNodeShape(ctx: CanvasRenderingContext2D, node: FlowNode) {
       ctx.lineTo(x + width, y + fold);
       ctx.lineTo(x + width, y + height);
       ctx.lineTo(x, y + height);
+      ctx.closePath();
+      break;
+    }
+    case 'callout': {
+      const pSize = 14;
+      ctx.roundRect(x, y, width, height - pSize, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x + 20, y + height - pSize);
+      ctx.lineTo(x + 10, y + height);
+      ctx.lineTo(x + 36, y + height - pSize);
+      ctx.closePath();
+      break;
+    }
+    case 'badge': {
+      const indent = 12;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + width, y);
+      ctx.lineTo(x + width - indent, y + height / 2);
+      ctx.lineTo(x + width, y + height);
+      ctx.lineTo(x, y + height);
+      ctx.lineTo(x + indent, y + height / 2);
       ctx.closePath();
       break;
     }

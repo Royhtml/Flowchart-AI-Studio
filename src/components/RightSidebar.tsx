@@ -51,6 +51,7 @@ import {
   X,
 } from 'lucide-react';
 import { StylePresetLibrary } from './StylePresetLibrary';
+import { DetailAIPanel } from './DetailAIPanel';
 import { chatWithFlowchartBot, BotChatMessage } from '../utils/llmService';
 import { diagramToDSL, dslToDiagram, ParseResult } from '../utils/codeSync';
 import { LLMConfig } from '../types';
@@ -83,6 +84,9 @@ interface RightSidebarProps {
   allNodes?: FlowNode[];
   allConnectors?: FlowConnector[];
   onApplyGeneratedCode?: (newNodes: FlowNode[], newConnectors: FlowConnector[]) => void;
+  projectName?: string;
+  currentTab?: 'properties' | 'chat' | 'detail_ai';
+  onTabChange?: (tab: 'properties' | 'chat' | 'detail_ai') => void;
 }
 
 const COLOR_PRESETS = [
@@ -125,6 +129,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   allNodes = [],
   allConnectors = [],
   onApplyGeneratedCode,
+  projectName = 'Interactive Flowchart Studio',
+  currentTab,
+  onTabChange,
 }) => {
   const [internalCollapsed, setInternalCollapsed] = React.useState(() => {
     if (typeof window !== 'undefined') {
@@ -133,7 +140,21 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
     return false;
   });
 
-  const [activeTab, setActiveTab] = React.useState<'properties' | 'chat'>('properties');
+  const [internalTab, setInternalTab] = React.useState<'properties' | 'chat' | 'detail_ai'>(
+    currentTab || 'properties'
+  );
+
+  React.useEffect(() => {
+    if (currentTab) {
+      setInternalTab(currentTab);
+    }
+  }, [currentTab]);
+
+  const activeTab = currentTab !== undefined ? currentTab : internalTab;
+  const setActiveTab = (tab: 'properties' | 'chat' | 'detail_ai') => {
+    setInternalTab(tab);
+    onTabChange?.(tab);
+  };
 
   // AI Chat Bot state
   const [chatMessages, setChatMessages] = React.useState<BotChatMessage[]>([
@@ -286,6 +307,20 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             <span>AI Bot</span>
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
           </button>
+          <button
+            id="tab-detail-ai"
+            onClick={() => setActiveTab('detail_ai')}
+            className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              activeTab === 'detail_ai'
+                ? 'bg-purple-950 text-purple-300 border border-purple-500/40 shadow-sm ring-1 ring-purple-500/30'
+                : 'text-slate-400 hover:text-purple-300'
+            }`}
+            title="Detail AI: Analisis Khusus Membahas Project Canvas Ini"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+            <span>Detail AI</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+          </button>
         </div>
 
         <button
@@ -437,6 +472,14 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             </form>
           </div>
         </div>
+      ) : activeTab === 'detail_ai' ? (
+        /* DETAIL AI CANVAS PROJECT CONSULTANT VIEW */
+        <DetailAIPanel
+          projectName={projectName}
+          nodes={allNodes}
+          connectors={allConnectors}
+          llmConfig={llmConfig}
+        />
       ) : (
         /* PROPERTIES INSPECTOR VIEW */
         <div className="flex-1 overflow-y-auto custom-scrollbar">

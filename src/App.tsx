@@ -35,8 +35,15 @@ import {
   addCanvasHistorySnapshot,
 } from './utils/canvasHistoryStorage';
 import { LLMConfig } from './types';
-import { getStoredLLMConfig, saveStoredLLMConfig, generateFlowchartWithLLM } from './utils/llmService';
+import { getStoredLLMConfig, saveStoredLLMConfig, generateFlowchartWithLLM, chatWithFlowchartBot } from './utils/llmService';
 import { diagramToDSL, dslToDiagram, ParseResult } from './utils/codeSync';
+import {
+  speakNodeNarrative,
+  speakBranchNarrative,
+  speakCompletionNarrative,
+  stopFemaleTTS,
+  testPlayFemaleVoice,
+} from './utils/femaleTTS';
 
 export default function App() {
   // Initial state loaded from localStorage or first comprehensive template
@@ -217,7 +224,35 @@ export default function App() {
     if (typeof window !== 'undefined') return window.innerWidth >= 1024;
     return true;
   });
+  const [rightSidebarTab, setRightSidebarTab] = useState<'properties' | 'chat' | 'detail_ai'>('properties');
   const [isAIChatBarOpen, setIsAIChatBarOpen] = useState(true);
+
+  // Female TTS narration state for flowchart animations
+  const [isFemaleTTSEnabled, setIsFemaleTTSEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('flowchart_tts_female_enabled');
+      return saved !== null ? saved === 'true' : true;
+    }
+    return true;
+  });
+
+  const handleToggleFemaleTTS = () => {
+    setIsFemaleTTSEnabled((prev) => {
+      const next = !prev;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('flowchart_tts_female_enabled', String(next));
+      }
+      if (!next) {
+        stopFemaleTTS();
+      }
+      return next;
+    });
+  };
+
+  const handleOpenDetailAI = () => {
+    setRightSidebarTab('detail_ai');
+    setIsRightSidebarOpen(true);
+  };
 
   const handleSaveLLMConfig = (newConfig: LLMConfig) => {
     setLlmConfig(newConfig);
@@ -789,9 +824,108 @@ export default function App() {
           rounded: 4,
           shadow: 'none',
         },
+        hexagon: {
+          width: 170,
+          height: 70,
+          label: 'Hexagon Step',
+          subLabel: 'Data processing',
+          fill: '#1e293b',
+          stroke: '#38bdf8',
+          rounded: 6,
+          shadow: 'none',
+        },
+        star: {
+          width: 120,
+          height: 120,
+          label: 'Milestone',
+          subLabel: 'Key achievement',
+          fill: '#312e81',
+          stroke: '#a855f7',
+          rounded: 4,
+          shadow: 'glow-violet',
+        },
+        triangle: {
+          width: 150,
+          height: 120,
+          label: 'Warning / Delta',
+          subLabel: 'Attention point',
+          fill: '#451a03',
+          stroke: '#f59e0b',
+          rounded: 4,
+          shadow: 'none',
+        },
+        cylinder: {
+          width: 160,
+          height: 80,
+          label: 'Storage Cylinder',
+          subLabel: 'Block repository',
+          fill: '#1a1f38',
+          stroke: '#818cf8',
+          rounded: 8,
+          shadow: 'none',
+        },
+        shield: {
+          width: 150,
+          height: 80,
+          label: 'Security Check',
+          subLabel: 'Auth & Policy',
+          fill: '#0f2b1d',
+          stroke: '#10b981',
+          rounded: 8,
+          shadow: 'glow-emerald',
+        },
+        'cloud-service': {
+          width: 190,
+          height: 76,
+          label: 'Cloud Endpoint',
+          subLabel: 'REST / Microservice',
+          fill: '#0c2e3a',
+          stroke: '#0ea5e9',
+          rounded: 16,
+          shadow: 'glow-cyan',
+        },
+        callout: {
+          width: 180,
+          height: 72,
+          label: 'Callout Note',
+          subLabel: 'Important detail',
+          fill: '#1e293b',
+          stroke: '#94a3b8',
+          rounded: 6,
+          shadow: 'none',
+        },
+        badge: {
+          width: 140,
+          height: 54,
+          label: 'Status Tag',
+          subLabel: 'Active status',
+          fill: '#14273e',
+          stroke: '#38bdf8',
+          rounded: 27,
+          shadow: 'none',
+        },
+        custom: {
+          width: 170,
+          height: 70,
+          label: 'Custom Element',
+          subLabel: 'Custom shape',
+          fill: '#1e293b',
+          stroke: '#38bdf8',
+          rounded: 8,
+          shadow: 'none',
+        },
       };
 
-      const def = shapeDefaults[type];
+      const def = shapeDefaults[type] ?? {
+        width: 170,
+        height: 70,
+        label: 'Node',
+        subLabel: '',
+        fill: '#1e293b',
+        stroke: '#38bdf8',
+        rounded: 8,
+        shadow: 'none',
+      };
       const newNode: FlowNode = {
         id: `node-${Date.now()}`,
         type,
@@ -1249,11 +1383,11 @@ export default function App() {
     resetSimulation();
   }, [recordHistory, resetSimulation]);
 
-  // AI Flowchart Generation from on-screen AI Chat Bar
+  // AI Flowchart Generation & Chat Assistant (Claude, Gemini, ChatGPT style)
   const handleGenerateFromAIChat = useCallback(
     async (promptText: string) => {
       setIsGeneratingFlowchart(true);
-      
+
       // Add user message to chat
       const userMsg = {
         id: `user-${Date.now()}`,
@@ -1261,76 +1395,91 @@ export default function App() {
         content: promptText,
         timestamp: Date.now(),
       };
-      setAiChatMessages(prev => [...prev, userMsg]);
-      
+      setAiChatMessages((prev) => [...prev, userMsg]);
+
       try {
         const currentDSL = diagramToDSL(nodes, connectors);
-        const generatedCode = await generateFlowchartWithLLM(promptText, currentDSL, llmConfig);
+        const { reply, generatedDSL } = await chatWithFlowchartBot(
+          promptText,
+          currentDSL,
+          aiChatMessages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp,
+            generatedDSL: m.flowchartCode,
+          })),
+          llmConfig
+        );
 
-        const parsed: ParseResult = dslToDiagram(generatedCode);
-        if (!parsed.success || !parsed.nodes || !parsed.connectors) {
-          throw new Error(parsed.error || 'AI FlowScript format could not be processed.');
+        let parsedDiagram: ParseResult | null = null;
+        if (generatedDSL) {
+          const parsed = dslToDiagram(generatedDSL);
+          if (parsed.success && parsed.nodes && parsed.connectors && parsed.nodes.length > 0) {
+            parsedDiagram = parsed;
+          }
         }
 
-        // Add assistant message with flowchart code to chat
+        // Add assistant message with concise reply and optional flowchart code
         const assistantMsg = {
           id: `assistant-${Date.now()}`,
           role: 'assistant' as const,
-          content: 'Flowchart generated successfully! You can preview the code below or apply it directly to canvas.',
-          flowchartCode: generatedCode,
+          content: reply || (parsedDiagram ? 'Flowchart berhasil diperbarui sesuai permintaan Anda:' : 'Poin utama:'),
+          flowchartCode: parsedDiagram ? generatedDSL : undefined,
           timestamp: Date.now(),
         };
-        setAiChatMessages(prev => [...prev, assistantMsg]);
+        setAiChatMessages((prev) => [...prev, assistantMsg]);
 
-        recordHistory();
-        setNodes(parsed.nodes);
-        setConnectors(parsed.connectors);
-        setSelectedNodeId(null);
-        setSelectedConnectorId(null);
-        resetSimulation();
+        // If a valid flowchart was generated, apply to canvas and trigger animation
+        if (parsedDiagram && parsedDiagram.nodes && parsedDiagram.connectors) {
+          recordHistory();
+          setNodes(parsedDiagram.nodes);
+          setConnectors(parsedDiagram.connectors);
+          setSelectedNodeId(null);
+          setSelectedConnectorId(null);
+          resetSimulation();
 
-        // Trigger entrance animation for nodes and connectors
-        setGenerationAnimationActive(true);
-        setTimeout(() => {
-          setGenerationAnimationActive(false);
-        }, 2500);
+          // Trigger entrance animation for nodes and connectors
+          setGenerationAnimationActive(true);
+          setTimeout(() => {
+            setGenerationAnimationActive(false);
+          }, 2200);
 
-        // Center and fit canvas viewport to frame the new flowchart
-        setTimeout(() => {
-          if (parsed.nodes && parsed.nodes.length > 0) {
-            const bounds = getDiagramBounds(parsed.nodes);
-            const viewportWidth = window.innerWidth - 320 - 256;
-            const viewportHeight = window.innerHeight - 56;
+          // Center and fit canvas viewport to frame the new flowchart
+          setTimeout(() => {
+            if (parsedDiagram?.nodes && parsedDiagram.nodes.length > 0) {
+              const bounds = getDiagramBounds(parsedDiagram.nodes);
+              const viewportWidth = window.innerWidth - 320 - 256;
+              const viewportHeight = window.innerHeight - 56;
 
-            const scaleX = (viewportWidth - 140) / Math.max(bounds.width, 100);
-            const scaleY = (viewportHeight - 140) / Math.max(bounds.height, 100);
-            const fitZoom = Math.min(1.15, Math.max(0.45, Math.min(scaleX, scaleY)));
+              const scaleX = (viewportWidth - 140) / Math.max(bounds.width, 100);
+              const scaleY = (viewportHeight - 140) / Math.max(bounds.height, 100);
+              const fitZoom = Math.min(1.15, Math.max(0.45, Math.min(scaleX, scaleY)));
 
-            const centerPanX = (viewportWidth - bounds.width * fitZoom) / 2 - bounds.minX * fitZoom;
-            const centerPanY = (viewportHeight - bounds.height * fitZoom) / 2 - bounds.minY * fitZoom;
+              const centerPanX = (viewportWidth - bounds.width * fitZoom) / 2 - bounds.minX * fitZoom;
+              const centerPanY = (viewportHeight - bounds.height * fitZoom) / 2 - bounds.minY * fitZoom;
 
-            setCanvasState((prev) => ({
-              ...prev,
-              zoom: fitZoom,
-              pan: { x: centerPanX, y: centerPanY },
-            }));
-          }
-        }, 120);
+              setCanvasState((prev) => ({
+                ...prev,
+                zoom: fitZoom,
+                pan: { x: centerPanX, y: centerPanY },
+              }));
+            }
+          }, 120);
+        }
       } catch (err: any) {
-        // Add error message to chat
         const errorMsg = {
           id: `assistant-error-${Date.now()}`,
           role: 'assistant' as const,
-          content: `Error: ${err.message || 'Failed to generate flowchart'}`,
+          content: `Pemberitahuan: ${err.message || 'Gagal memproses permintaan chat.'}`,
           timestamp: Date.now(),
         };
-        setAiChatMessages(prev => [...prev, errorMsg]);
-        throw err;
+        setAiChatMessages((prev) => [...prev, errorMsg]);
       } finally {
         setIsGeneratingFlowchart(false);
       }
     },
-    [nodes, connectors, llmConfig, recordHistory, resetSimulation]
+    [nodes, connectors, aiChatMessages, llmConfig, recordHistory, resetSimulation]
   );
 
   // Apply Flowchart from AI Chat Code to Canvas
@@ -1675,7 +1824,8 @@ export default function App() {
         canvasState={canvasState}
         onUpdateCanvasState={handleUpdateCanvasState}
         onResetZoom={handleResetZoom}
-        onExportPNG={() => setIsExportModalOpen(true)}
+        onOpenExportModal={() => setIsExportModalOpen(true)}
+        onExportPNG={handleExportPNG}
         onExportJSON={handleExportJSON}
         onImportJSON={handleImportJSON}
         onOpenTemplates={() => setIsTemplatesModalOpen(true)}
@@ -1872,11 +2022,13 @@ export default function App() {
         onNewBlank={handleNewBlank}
       />
 
-      {/* Export Modal */}
+      {/* Export Modal with Live Canvas Preview */}
       <ExportModal
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
         projectName={projectName}
+        nodes={nodes}
+        connectors={connectors}
         onExport={handleExportPNG}
       />
 
