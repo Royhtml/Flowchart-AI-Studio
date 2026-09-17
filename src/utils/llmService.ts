@@ -9,39 +9,15 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
   openaiApiKey: '',
   openaiModel: 'gpt-4o-mini',
   openaiBaseUrl: 'https://api.openai.com/v1',
-  claudeApiKey: '',
-  claudeModel: 'claude-sonnet-4-5',
+  claudeApiKey: 'Kamu adalah asisten AI yang pintar dan ramah. Berikan jawaban yang tepat dan JANGAN PERNAH mengulang kalimat yang sama. Jika user mengirim file gambar, kamu hanya bisa melihat nama file tapi tidak bisa memproses visual gambar karena kamu model text-only, jelaskan hal itu dengan sopan.',
+  claudeModel: 'claude-3-5-sonnet-20241022',
   customEndpoint: 'http://127.0.0.1:8088/completion',
   customApiKey: '',
-  customModel: 'local-model',
+  customModel: 'local-llm',
   temperature: 0.2,
 };
 
-/**
- * Load LLM configuration from localStorage
- */
-export function getStoredLLMConfig(): LLMConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_LLM_CONFIG;
-    const parsed = JSON.parse(raw);
-    return { ...DEFAULT_LLM_CONFIG, ...parsed };
-  } catch {
-    return DEFAULT_LLM_CONFIG;
-  }
-}
-
-/**
- * Save LLM configuration to localStorage
- */
-export function saveStoredLLMConfig(config: LLMConfig): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-  } catch (err) {
-    console.error('Failed to save LLM config to localStorage:', err);
-  }
-}
-
+// System prompt for flowchart DSL generation
 const SYSTEM_PROMPT = `You are an Expert Flowchart & System Logic Architect.
 Your task is to create or modify flowchart code in "FlowScript DSL" format based on user requests. The user prompt can be in any language (English, Indonesian, Spanish, Japanese, etc.) — always generate valid FlowScript DSL with appropriate descriptive labels.
 
@@ -75,26 +51,54 @@ IMPORTANT RULES:
 4. Do not include conversational pleasantries. Return ONLY the valid FlowScript DSL block.`;
 
 /**
- * Generate Flowchart FlowScript DSL using the configured LLM
+ * Load LLM configuration from localStorage
  */
-export async function generateFlowchartWithLLM(
-  userPrompt: string,
-  currentProjectCode: string,
-  config: LLMConfig
-): Promise<string> {
-  const promptContext = currentProjectCode.trim()
-    ? `CURRENT PROJECT CODE:\n${currentProjectCode}\n\nUSER REQUEST:\n${userPrompt}\n\nUpdate or generate complete FlowScript DSL code according to the request:`
-    : `USER REQUEST:\n${userPrompt}\n\nGenerate complete FlowScript DSL code:`;
+export function getStoredLLMConfig(): LLMConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULT_LLM_CONFIG;
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_LLM_CONFIG, ...parsed };
+  } catch {
+    return DEFAULT_LLM_CONFIG;
+  }
+}
 
+/**
+ * Save LLM configuration to localStorage
+ */
+export function saveStoredLLMConfig(config: LLMConfig): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  } catch (err) {
+    console.error('Failed to save LLM config to localStorage:', err);
+  }
+}
+
+// Helper to extract personality/system prompt from config
+function getPersonalityPrompt(config: LLMConfig): string {
+  return config.claudeApiKey?.trim() || SYSTEM_PROMPT;
+}
+
+/**
+ * Unified LLM provider caller - routes to appropriate service
+ * NO timeout interruption - let fetch complete naturally
+ */
+async function callLLMProvider(
+  prompt: string,
+  personality: string,
+  config: LLMConfig,
+  maxTokens: number
+): Promise<string> {
   switch (config.provider) {
     case 'gemini':
-      return callGeminiAPI(promptContext, config);
+      return callGeminiAPI(prompt, personality, config, maxTokens);
     case 'openai':
-      return callOpenAIAPI(promptContext, config);
+      return callOpenAIAPI(prompt, personality, config, maxTokens);
     case 'claude':
-      return callClaudeAPI(promptContext, config);
+      return callClaudeAPI(prompt, personality, config, maxTokens);
     case 'custom_local':
-      return callCustomLocalAPI(promptContext, config);
+      return callCustomLocalAPI(prompt, personality, config, maxTokens);
     default:
       throw new Error(`Unrecognized LLM provider: ${config.provider}`);
   }
@@ -102,8 +106,14 @@ export async function generateFlowchartWithLLM(
 
 /**
  * Call Google Gemini API
+ * No timeout, only network error handling
  */
-async function callGeminiAPI(prompt: string, config: LLMConfig): Promise<string> {
+async function callGeminiAPI(
+  prompt: string,
+  personality: string,
+  config: LLMConfig,
+  maxTokens: number
+): Promise<string> {
   const apiKey = config.geminiApiKey.trim();
   if (!apiKey) {
     throw new Error('Google Gemini API Key is missing. Please enter your Gemini API Key in the LLM Settings menu.');
@@ -112,42 +122,56 @@ async function callGeminiAPI(prompt: string, config: LLMConfig): Promise<string>
   const model = config.geminiModel || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `${SYSTEM_PROMPT}\n\n${prompt}` }],
-        },
-      ],
-      generationConfig: {
-        temperature: config.temperature ?? 0.2,
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
-    }),
-  });
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `${personality}\n\n${prompt}` }],
+          },
+        ],
+        generationConfig: {
+          temperature: config.temperature ?? 0.2,
+          maxOutputTokens: maxTokens,
+        },
+      }),
+    });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Failed to call Gemini API (${response.status}): ${errText}`);
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini API Error (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      throw new Error('Gemini returned empty response');
+    }
+
+    return cleanDSLResponse(rawText);
+  } catch (err: any) {
+    if (err.message.includes('fetch')) {
+      throw new Error('Tidak bisa terhubung ke Gemini API. Cek koneksi internet dan API key.');
+    }
+    throw err;
   }
-
-  const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) {
-    throw new Error('Gemini returned an empty text response.');
-  }
-
-  return cleanDSLResponse(rawText);
 }
 
 /**
  * Call OpenAI API
+ * No timeout, only network error handling
  */
-async function callOpenAIAPI(prompt: string, config: LLMConfig): Promise<string> {
+async function callOpenAIAPI(
+  prompt: string,
+  personality: string,
+  config: LLMConfig,
+  maxTokens: number
+): Promise<string> {
   const apiKey = config.openaiApiKey.trim();
   if (!apiKey) {
     throw new Error('OpenAI API Key is missing. Please enter your OpenAI API Key in the LLM Settings menu.');
@@ -157,40 +181,54 @@ async function callOpenAIAPI(prompt: string, config: LLMConfig): Promise<string>
   const url = `${baseUrl}/chat/completions`;
   const model = config.openaiModel || 'gpt-4o-mini';
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: config.temperature ?? 0.2,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-    }),
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: config.temperature ?? 0.2,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: personality },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Failed to call OpenAI API (${response.status}): ${errText}`);
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI API Error (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data?.choices?.[0]?.message?.content;
+    if (!rawText) {
+      throw new Error('OpenAI returned empty response');
+    }
+
+    return cleanDSLResponse(rawText);
+  } catch (err: any) {
+    if (err.message.includes('fetch')) {
+      throw new Error('Tidak bisa terhubung ke OpenAI API. Cek koneksi internet dan API key.');
+    }
+    throw err;
   }
-
-  const data = await response.json();
-  const rawText = data?.choices?.[0]?.message?.content;
-  if (!rawText) {
-    throw new Error('OpenAI returned an empty text response.');
-  }
-
-  return cleanDSLResponse(rawText);
 }
 
 /**
  * Call Claude (Anthropic) API
+ * No timeout, only network error handling
  */
-async function callClaudeAPI(prompt: string, config: LLMConfig): Promise<string> {
+async function callClaudeAPI(
+  prompt: string,
+  personality: string,
+  config: LLMConfig,
+  maxTokens: number
+): Promise<string> {
   const apiKey = config.claudeApiKey.trim();
   if (!apiKey) {
     throw new Error('Claude API Key is missing. Please enter your Claude API Key in the LLM Settings menu.');
@@ -199,44 +237,57 @@ async function callClaudeAPI(prompt: string, config: LLMConfig): Promise<string>
   const url = 'https://api.anthropic.com/v1/messages';
   const model = config.claudeModel || 'claude-3-5-sonnet-20241022';
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4000,
-      temperature: config.temperature ?? 0.2,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        temperature: config.temperature ?? 0.2,
+        system: personality,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Failed to call Claude API (${response.status}): ${errText}`);
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Claude API Error (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data?.content?.[0]?.text;
+    if (!rawText) {
+      throw new Error('Claude returned empty response');
+    }
+
+    return cleanDSLResponse(rawText);
+  } catch (err: any) {
+    if (err.message.includes('fetch')) {
+      throw new Error('Tidak bisa terhubung ke Claude API. Cek koneksi internet dan API key.');
+    }
+    throw err;
   }
-
-  const data = await response.json();
-  const rawText = data?.content?.[0]?.text;
-  if (!rawText) {
-    throw new Error('Claude returned an empty text response.');
-  }
-
-  return cleanDSLResponse(rawText);
 }
 
 /**
- * Call Custom Local LLM Endpoint (e.g. http://127.0.0.1:8088/completion)
+ * Call Custom Local LLM Endpoint
+ * NO timeout - let response complete naturally, only network error handling
  */
-async function callCustomLocalAPI(prompt: string, config: LLMConfig): Promise<string> {
+async function callCustomLocalAPI(
+  prompt: string,
+  personality: string,
+  config: LLMConfig,
+  maxTokens: number
+): Promise<string> {
   const endpoint = (config.customEndpoint || 'http://127.0.0.1:8088/completion').trim();
   if (!endpoint) {
-    throw new Error('Local LLM endpoint is not specified (e.g., http://127.0.0.1:8088/completion)');
+    throw new Error('Local LLM endpoint tidak dikonfigurasi (e.g., http://127.0.0.1:8088/completion)');
   }
 
   const headers: Record<string, string> = {
@@ -247,19 +298,19 @@ async function callCustomLocalAPI(prompt: string, config: LLMConfig): Promise<st
     headers['Authorization'] = `Bearer ${config.customApiKey.trim()}`;
   }
 
-  // Construct payload. If endpoint ends with /completion (llama.cpp server format):
-  const fullPrompt = `<|system|>\n${SYSTEM_PROMPT}\n<|user|>\n${prompt}\n<|assistant|>\n`;
+  const fullPrompt = `<|system|>\n${personality}\n<|user|>\n${prompt}\n<|assistant|>\n`;
 
   let body: string;
-  const isLlamaCompletion = endpoint.endsWith('/completion');
   const isChatCompletions = endpoint.includes('/chat/completions');
 
   if (isChatCompletions) {
     body = JSON.stringify({
-      model: config.customModel || 'local-model',
-      temperature: config.temperature ?? 0.2,
+      model: config.customModel || 'local-llm',
+      temperature: config.temperature ?? 0.3,
+      top_p: 0.95,
+      max_tokens: maxTokens,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: personality },
         { role: 'user', content: prompt },
       ],
     });
@@ -267,14 +318,16 @@ async function callCustomLocalAPI(prompt: string, config: LLMConfig): Promise<st
     // Default llama.cpp / text completion endpoint format
     body = JSON.stringify({
       prompt: fullPrompt,
-      temperature: config.temperature ?? 0.2,
-      n_predict: 2048,
+      temperature: config.temperature ?? 0.3,
+      top_p: 0.95,
+      n_predict: maxTokens,
       stream: false,
-      stop: ['<|end|>', '<|user|>', '</s>'],
+      stop: ['<|end|>', '<|user|>', '</s>', 'User:', 'Assistant:'],
     });
   }
 
   try {
+    // NO ABORT CONTROLLER - biarkan fetch complete secara natural tanpa timeout
     const response = await fetch(endpoint, {
       method: 'POST',
       headers,
@@ -283,15 +336,12 @@ async function callCustomLocalAPI(prompt: string, config: LLMConfig): Promise<st
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Local LLM Server responded with status ${response.status}: ${errText}`);
+      throw new Error(`Local server error (${response.status}): ${errText}`);
     }
 
     const data = await response.json();
-    // Support various local endpoint response shapes:
-    // llama.cpp: { content: "..." }
-    // Ollama: { response: "..." }
-    // OpenAI format: { choices: [{ message: { content: "..." } }] }
-    // text-gen: { text: "..." } or [{ generated_text: "..." }]
+
+    // Support various response formats
     let rawText = '';
     if (typeof data.content === 'string') {
       rawText = data.content;
@@ -299,6 +349,10 @@ async function callCustomLocalAPI(prompt: string, config: LLMConfig): Promise<st
       rawText = data.response;
     } else if (typeof data.text === 'string') {
       rawText = data.text;
+    } else if (typeof data.choices === 'string') {
+      rawText = data.choices;
+    } else if (data.result && typeof data.result === 'string') {
+      rawText = data.result;
     } else if (Array.isArray(data.choices) && data.choices[0]?.message?.content) {
       rawText = data.choices[0].message.content;
     } else if (Array.isArray(data.choices) && data.choices[0]?.text) {
@@ -311,14 +365,197 @@ async function callCustomLocalAPI(prompt: string, config: LLMConfig): Promise<st
 
     return cleanDSLResponse(rawText);
   } catch (err: any) {
-    if (err.name === 'TypeError' && err.message.includes('fetch')) {
+    if (err.name === 'TypeError' || err.message.includes('fetch')) {
       throw new Error(
-        `Cannot reach local server at ${endpoint}.\n` +
-        `Make sure your local server is running (e.g. llama-server --port 8088) with CORS enabled (--cors-allow-origin *).`
+        `Tidak bisa terhubung ke server ${endpoint}.\nPastikan server sudah running (e.g. llama-server --port 8088) dengan CORS enabled (--cors-allow-origin *).`
       );
     }
     throw err;
   }
+}
+
+/**
+ * Generate Flowchart FlowScript DSL - LEAN OPTIMIZED (2048 tokens)
+ * Focused solely on flowchart generation with minimal context
+ * Uses STRICT prompt for CLEAN DSL format output
+ */
+export async function generateFlowchartWithAIFlow(
+  userPrompt: string,
+  currentProjectCode: string,
+  config: LLMConfig
+): Promise<{ reply: string; generatedDSL?: string }> {
+  // STRICT system prompt for CLEAN DSL generation - NO markdown, NO explanations
+  const strictSystemPrompt = `You are a flowchart DSL generator. Generate ONLY FlowScript DSL code, nothing else.
+
+STRICT RULES:
+1. OUTPUT ONLY the DSL code - no explanations, no markdown blocks, no text before or after
+2. Start with [NODES] section
+3. Follow with [CONNECTORS] section
+4. Auto-generate coordinates: x=340 (center main flow), y starts at 60 and increments by 130-150
+5. For branches: x=225 (left branch), x=455 (right branch)
+6. Node IDs: n1, n2, n3, ... (simple sequential numbering)
+7. Include ALL connectors with descriptive labels
+8. Supported types: terminator, process, decision, input-output, database, document, cloud, predefined-process, manual-input, display, delay
+9. NO markdown code blocks - output raw DSL only
+10. NO explanations, NO descriptions, ONLY DSL code
+
+EXAMPLE (this is the ONLY output format):
+[NODES]
+terminator: n1 "Start" (x: 340, y: 60)
+input-output: n2 "Input Data" (x: 340, y: 190)
+decision: n3 "Valid?" (x: 340, y: 320)
+process: n4 "Process" (x: 225, y: 450)
+process: n5 "Error" (x: 455, y: 450)
+terminator: n6 "End" (x: 340, y: 580)
+
+[CONNECTORS]
+n1 -> n2 "Begin"
+n2 -> n3 "Check"
+n3 -> n4 "Yes"
+n3 -> n5 "No"
+n4 -> n6 "Complete"
+n5 -> n2 "Retry"`;
+
+  const leanPrompt = currentProjectCode.trim()
+    ? `User: ${userPrompt}\nCurrent code:\n${currentProjectCode}\nGenerate updated FlowScript DSL:`
+    : `User: ${userPrompt}\nGenerate FlowScript DSL:`;
+
+  try {
+    const rawResponse = await callLLMProvider(leanPrompt, strictSystemPrompt, config, 2048);
+
+    let generatedDSL: string | undefined;
+    let reply = rawResponse;
+
+    // Extract DSL if present (handle markdown blocks)
+    const dslMatch = rawResponse.match(/```(?:flowscript|dsl)?\s*([\s\S]*?\[NODES\][\s\S]*?)\s*```/i);
+    if (dslMatch) {
+      generatedDSL = cleanDSLResponse(dslMatch[1]);
+      reply = rawResponse.replace(/```(?:flowscript|dsl)?\s*([\s\S]*?\[NODES\][\s\S]*?)\s*```/i, '').trim();
+    } else if (rawResponse.includes('[NODES]')) {
+      const idx = rawResponse.indexOf('[NODES]');
+      generatedDSL = cleanDSLResponse(rawResponse.substring(idx));
+      reply = rawResponse.substring(0, idx).trim();
+    }
+
+    return {
+      reply: reply || 'Flowchart generated successfully',
+      generatedDSL,
+    };
+  } catch (err: any) {
+    throw new Error(`Flowchart generation failed: ${err.message}`);
+  }
+}
+
+/**
+ * Explain Flowchart in Detail - LEAN OPTIMIZED (1024 tokens)
+ * Focused explanation with minimal overhead
+ * 
+ * @param flowchartDSL - The flowchart code to explain
+ * @param userQuery - The specific question or explanation request
+ * @param config - LLM configuration
+ * @param contextType - Type of explanation: "overview" | "specific" | "optimization"
+ */
+export async function explainFlowchartDetail(
+  flowchartDSL: string,
+  userQuery: string,
+  config: LLMConfig,
+  contextType: 'overview' | 'specific' | 'optimization' = 'specific'
+): Promise<{ reply: string; generatedDSL?: string }> {
+  const personality = getPersonalityPrompt(config);
+
+  let contextPrompt = '';
+  if (contextType === 'overview') {
+    contextPrompt = `Provide a high-level overview of what this flowchart does. Keep it brief, no repetition.`;
+  } else if (contextType === 'optimization') {
+    contextPrompt = `Focus on optimization opportunities and improvements. What can be made more efficient?`;
+  } else {
+    contextPrompt = `Answer the specific question asked. Be concise and direct.`;
+  }
+
+  const leanPrompt = `${contextPrompt}
+
+Diagram:
+${flowchartDSL}
+
+Question: ${userQuery}
+
+IMPORTANT: 
+- NEVER repeat the same explanation twice
+- Be concise and precise
+- Only answer what is asked, no padding
+- No markdown formatting
+- Maximum 3-4 sentences`;
+
+  try {
+    const reply = await callLLMProvider(leanPrompt, personality, config, 1024);
+
+    return {
+      reply: reply || 'No explanation available',
+    };
+  } catch (err: any) {
+    throw new Error(`Penjelasan gagal: ${err.message}`);
+  }
+}
+
+/**
+ * Chat with Flowchart Bot - LEAN OPTIMIZED (2048 tokens, last 2 history)
+ * Conversation mode with minimal history to save tokens
+ */
+export async function chatWithFlowchartBot(
+  userMessage: string,
+  currentDSL: string,
+  history: BotChatMessage[],
+  config: LLMConfig
+): Promise<{ reply: string; generatedDSL?: string }> {
+  const personality = getPersonalityPrompt(config);
+
+  // Only use last 2 messages from history
+  const recentHistory = history.slice(-2);
+  const historyText = recentHistory
+    .map((m) => `${m.role === 'user' ? 'U' : 'A'}: ${m.content.substring(0, 80)}`)
+    .join('\n') || 'None';
+
+  const leanPrompt = `History: ${historyText}\nCanvas: ${currentDSL.substring(0, 200)}\nUser: ${userMessage}\nReply:`;
+
+  try {
+    const rawResponse = await callLLMProvider(leanPrompt, personality, config, 2048);
+
+    let generatedDSL: string | undefined;
+    let reply = rawResponse;
+
+    // Extract DSL if present
+    const dslMatch = rawResponse.match(/```(?:flowscript|dsl)?\s*([\s\S]*?\[NODES\][\s\S]*?)\s*```/i);
+    if (dslMatch) {
+      generatedDSL = cleanDSLResponse(dslMatch[1]);
+      reply = rawResponse.replace(/```(?:flowscript|dsl)?\s*([\s\S]*?\[NODES\][\s\S]*?)\s*```/i, '').trim();
+    } else if (rawResponse.includes('[NODES]')) {
+      const idx = rawResponse.indexOf('[NODES]');
+      if (idx !== -1) {
+        generatedDSL = cleanDSLResponse(rawResponse.substring(idx));
+        reply = rawResponse.substring(0, idx).trim();
+      }
+    }
+
+    return {
+      reply: reply || 'Terima kasih atas pertanyaannya',
+      generatedDSL,
+    };
+  } catch (err: any) {
+    throw new Error(`Chat gagal: ${err.message}`);
+  }
+}
+
+/**
+ * LEGACY: Old function signature for backward compatibility
+ * Calls new chatWithFlowchartBot internally
+ */
+export async function chatWithFlowchartBotLegacy(
+  userMessage: string,
+  currentDSL: string,
+  history: BotChatMessage[],
+  config: LLMConfig
+): Promise<{ reply: string; generatedDSL?: string }> {
+  return chatWithFlowchartBot(userMessage, currentDSL, history, config);
 }
 
 /**
@@ -385,6 +622,9 @@ export const BOT_ASSISTANT_SYSTEM_PROMPT = `You are FlowChart AI — a specializ
 CRITICAL INSTRUCTIONS:
 1. EXTREMELY CONCISE & POINT-BASED (JAWAB SINGKAT & SESUAI POIN UTAMA):
    - Always respond directly to the question focusing strictly on MAIN KEY POINTS ONLY (hanya poin-poin utama).
+   - NEVER repeat the same explanation twice in a conversation
+   - Be concise and precise
+   - Only answer what is asked, no padding
    - Strict format structure:
      • Exactly 1 brief, crisp introductory sentence.
      • Exactly 2 to 4 bullet points (•) summarizing key takeaways.
@@ -405,370 +645,24 @@ CRITICAL INSTRUCTIONS:
 [CONNECTORS]
 <fromId> -> <toId> "<label>"
 \`\`\`
-Supported types: start_end, process, decision, input_output, database, document, delay, note, cloud, manual_input, internal_storage, display.`;
+Supported types: start_end, process, decision, input_output, database, document, delay, note, cloud, manual_input, internal_storage, display.
 
-/**
- * High-speed built-in knowledge responder for common flowchart questions & generation
- * Returns instant (<30ms) concise answers matching Gemini/Claude/ChatGPT style.
- */
-function getFastBuiltinResponse(
-  userMessage: string,
-  currentDSL: string
-): { reply: string; generatedDSL?: string } {
-  const q = userMessage.toLowerCase().trim();
-  const isIndo = !/[a-z]/.test(q) || /(apa|bagaimana|buat|bikin|alur|cara|jelaskan|kapan|kenapa|fungsi|simbol|diagram|konektor)/i.test(q);
-
-  // Check if explicit diagram generation is requested
-  const isCreateRequest = /(buat|buatkan|bikin|generate|create|make|build|design|gambarkan)\s+(flowchart|diagram|alur|flow|proses)/i.test(q);
-
-  if (isCreateRequest) {
-    if (q.includes('login') || q.includes('masuk') || q.includes('auth')) {
-      const dsl = `[NODES]
-start_end: n1 "Mulai"
-input_output: n2 "Input Username & Password"
-decision: n3 "Kredensial Valid?"
-process: n4 "Buka Dashboard"
-process: n5 "Tampilkan Pesan Error"
-start_end: n6 "Selesai"
-
-[CONNECTORS]
-n1 -> n2 "Buka Halaman Login"
-n2 -> n3 "Kirim Data"
-n3 -> n4 "Ya (Valid)"
-n3 -> n5 "Tidak (Gagal)"
-n5 -> n2 "Coba Lagi"
-n4 -> n6 "Selesai Masuk"`;
-      return {
-        reply: isIndo
-          ? `Alur autentikasi login pengguna dengan validasi kredensial:\n• Input data: Pengguna memasukkan username dan password\n• Evaluasi: Sistem memverifikasi kecocokan akun di database\n• Percabangan: Akses dashboard jika valid, atau tampilkan pesan error jika salah`
-          : `User authentication workflow with credential verification:\n• Input credentials: User enters username and password\n• Verification: System checks credentials against database\n• Branching: Grants dashboard access if valid, prompts retry on error`,
-        generatedDSL: dsl,
-      };
-    }
-
-    if (q.includes('checkout') || q.includes('belanja') || q.includes('bayar') || q.includes('order') || q.includes('payment')) {
-      const dsl = `[NODES]
-start_end: n1 "Mulai Checkout"
-input_output: n2 "Pilih Metode Pembayaran"
-decision: n3 "Saldo / Limit Cukup?"
-process: n4 "Proses Transaksi & Invoice"
-process: n5 "Kirim Notifikasi Gagal"
-database: n6 "Update Stok & Status Order"
-start_end: n7 "Selesai"
-
-[CONNECTORS]
-n1 -> n2 "Buka Keranjang"
-n2 -> n3 "Konfirmasi Bayar"
-n3 -> n4 "Ya (Cukup)"
-n3 -> n5 "Tidak (Kurang)"
-n4 -> n6 "Simpan Transaksi"
-n6 -> n7 "Order Berhasil"
-n5 -> n2 "Pilih Metode Lain"`;
-      return {
-        reply: isIndo
-          ? `Alur proses checkout dan pembayaran e-commerce:\n• Seleksi pembayaran: Pembeli memilih metode transfer atau e-wallet\n• Pengecekan saldo: Gateway memverifikasi kecukupan dana\n• Penyelesaian: Update stok database dan terbitkan invoice pesanan`
-          : `E-commerce checkout and payment process:\n• Payment selection: Buyer chooses payment method or gateway\n• Balance verification: Gateway verifies sufficient funds\n• Order completion: Updates inventory and generates invoice`,
-        generatedDSL: dsl,
-      };
-    }
-
-    if (q.includes('registrasi') || q.includes('daftar') || q.includes('register') || q.includes('signup')) {
-      const dsl = `[NODES]
-start_end: n1 "Mulai Registrasi"
-input_output: n2 "Isi Form Pendaftaran"
-decision: n3 "Email Sudah Terdaftar?"
-process: n4 "Kirim Kode OTP Verifikasi"
-decision: n5 "OTP Sesuai?"
-process: n6 "Aktivasi Akun Baru"
-start_end: n7 "Selesai"
-
-[CONNECTORS]
-n1 -> n2 "Buka Halaman Daftar"
-n2 -> n3 "Cek Database"
-n3 -> n4 "Tidak (Email Baru)"
-n3 -> n2 "Ya (Gunakan Email Lain)"
-n4 -> n5 "Input Kode OTP"
-n5 -> n6 "Ya (Valid)"
-n5 -> n4 "Tidak (Kirim Ulang)"
-n6 -> n7 "Akun Aktif"`;
-      return {
-        reply: isIndo
-          ? `Alur registrasi akun baru dengan verifikasi OTP:\n• Formulir pendaftaran: Pengguna mengisi identitas dan email\n• Validasi keunikan: Pengecekan apakah email sudah terdaftar\n• Verifikasi keamanan: Pengiriman dan pencocokan kode OTP sebelum aktivasi`
-          : `New user registration workflow with OTP verification:\n• Form submission: User inputs identity details and email\n• Uniqueness check: Verifies if email is already in database\n• Security verification: Sends and validates OTP code before activation`,
-        generatedDSL: dsl,
-      };
-    }
-
-    // Generic diagram generation
-    const dsl = `[NODES]
-start_end: n1 "Mulai"
-process: n2 "Identifikasi Input & Parameter"
-decision: n3 "Syarat Terpenuhi?"
-process: n4 "Eksekusi Proses Utama"
-process: n5 "Penyesuaian Data"
-start_end: n6 "Selesai"
-
-[CONNECTORS]
-n1 -> n2 "Inisiasi"
-n2 -> n3 "Evaluasi"
-n3 -> n4 "Ya"
-n3 -> n5 "Tidak"
-n5 -> n2 "Revisi"
-n4 -> n6 "Selesai"`;
-    return {
-      reply: isIndo
-        ? `Alur diagram proses terstruktur:\n• Tahap awal: Inisialisasi dan verifikasi parameter input\n• Evaluasi logika: Pengujian kondisi pemenuhan syarat\n• Eksekusi akhir: Penyelesaian tugas dan pencatatan hasil`
-        : `Structured process workflow diagram:\n• Initiation: Prepares and validates input parameters\n• Logic evaluation: Tests conditional requirements\n• Final execution: Completes task and outputs result`,
-      generatedDSL: dsl,
-    };
-  }
-
-  // Informational / Explanatory questions
-  if (q.includes('decision') || q.includes('keputusan') || q.includes('belah ketupat') || q.includes('diamond') || q.includes('percabangan')) {
-    return {
-      reply: isIndo
-        ? `Simbol Decision (Belah Ketupat) digunakan untuk percabangan alur logika berdasarkan suatu kondisi:\n• Menguji kondisi bernilai Benar/Salah (Ya/Tidak)\n• Memiliki minimal 2 jalur keluar bercabang\n• Menentukan arah aliran data berikutnya secara dinamis`
-        : `The Decision symbol (Diamond) branches workflow logic based on evaluated conditions:\n• Tests conditions with Boolean Yes/No or True/False outcomes\n• Requires at least 2 outgoing connector paths\n• Dynamically routes flow based on verification results`,
-    };
-  }
-
-  if (q.includes('terminator') || q.includes('start') || q.includes('end') || q.includes('mulai') || q.includes('selesai') || q.includes('oval')) {
-    return {
-      reply: isIndo
-        ? `Simbol Terminator (Oval/Kapsul) menandai titik awal dan penutup suatu flowchart:\n• Start: Menandai gerbang masuk eksekusi (hanya memiliki garis keluar)\n• End: Menandai akhir proses atau titik terminasi (hanya memiliki garis masuk)\n• Memastikan alur proses memiliki batas lingkup yang jelas dan terhingga`
-        : `The Terminator symbol (Oval/Pill) defines the boundary start and end points of a flowchart:\n• Start: Marks the entry point with only outgoing flow\n• End: Marks the termination state with only incoming flow\n• Ensures the process has clearly defined, finite boundaries`,
-    };
-  }
-
-  if (q.includes('process') || q.includes('proses') || q.includes('kotak') || q.includes('persegi')) {
-    return {
-      reply: isIndo
-        ? `Simbol Process (Persegi Panjang) merepresentasikan eksekusi aksi atau perhitungan sistem:\n• Melakukan kalkulasi matematis atau transformasi data\n• Menjalankan operasi internal tanpa interaksi manual pengguna\n• Memiliki relasi 1 garis masuk dan 1 garis keluar langsung`
-        : `The Process symbol (Rectangle) represents an automated operational or calculation step:\n• Executes mathematical calculations or data transformation\n• Performs internal system actions without manual input\n• Typically connects with 1 incoming and 1 outgoing flow line`,
-    };
-  }
-
-  if (q.includes('database') || q.includes('data') || q.includes('penyimpanan') || q.includes('storage') || q.includes('silinder')) {
-    return {
-      reply: isIndo
-        ? `Simbol Database (Silinder) merepresentasikan penyimpanan data terstruktur:\n• Menyimpan catatan transaksi dan identitas entitas sistem\n• Mendukung operasi pembacaan (Query/Read) dan penulisan (Write/Update)\n• Berfungsi sebagai sumber kebenaran data persisten antar proses`
-        : `The Database symbol (Cylinder) represents structured data storage:\n• Persists system records, transactions, and entity states\n• Supports both Read/Query and Write/Update operations\n• Acts as the persistent single source of truth across steps`,
-    };
-  }
-
-  if (q.includes('input') || q.includes('output') || q.includes('jajar genjang') || q.includes('io')) {
-    return {
-      reply: isIndo
-        ? `Simbol Data / I-O (Jajar Genjang) digunakan untuk transfer informasi masuk dan keluar:\n• Input: Menerima data dari pengguna atau sensor luar\n• Output: Menampilkan hasil laporan atau respon kepada pengguna\n• Memisahkan interaksi eksternal dari komputasi internal proses`
-        : `The Data / I-O symbol (Parallelogram) represents data transfer into or out of the system:\n• Input: Captures user input or external sensor feeds\n• Output: Displays reports, messages, or exported results\n• Distinguishes external interaction from internal computation`,
-    };
-  }
-
-  if (q.includes('aturan') || q.includes('prinsip') || q.includes('best practice') || q.includes('cara membuat')) {
-    return {
-      reply: isIndo
-        ? `Prinsip utama standar perancangan flowchart profesional:\n• Arah konsisten: Alur mengalir teratur dari atas ke bawah atau kiri ke kanan\n• Keterbacaan label: Teks ringkas dengan kata kerja aktif pada setiap node\n• Integritas alur: Seluruh jalur cabang harus berakhir di titik Terminator yang valid`
-        : `Core principles for professional flowchart design:\n• Consistent direction: Flows logically from top-to-bottom or left-to-right\n• Crisp labeling: Use short, active verb phrases for each step\n• Path integrity: All conditional branches must terminate at valid endpoints`,
-    };
-  }
-
-  // General fallback query response
-  return {
-    reply: isIndo
-      ? `Poin utama mengenai perancangan dan logika flowchart:\n• Identifikasi tujuan: Tentukan batasan awal (Start) dan hasil akhir (End) proses\n• Petakan langkah: Gunakan simbol standar (Proses, Keputusan, Data) secara konsisten\n• Uji skenario: Pastikan seluruh kondisi Ya/Tidak memiliki jalur penanganan yang tuntas`
-      : `Core points regarding flowchart logic and architecture:\n• Define scope: Establish clear Start and End boundaries for the workflow\n• Standardize symbols: Consistently apply Process, Decision, and Data nodes\n• Validate branching: Ensure every conditional path leads to a resolved outcome`,
-  };
-}
-
-/**
- * Interactive Chat with Flowchart Bot Assistant (Claude / Gemini / ChatGPT style)
- * Fast, concise, point-based responses.
- */
-export async function chatWithFlowchartBot(
-  userMessage: string,
-  currentDSL: string,
-  history: BotChatMessage[],
-  config: LLMConfig
-): Promise<{ reply: string; generatedDSL?: string }> {
-  const promptContext = `CURRENT CANVAS FLOWCHART CODE:
-${currentDSL.trim() || '(Canvas is currently empty)'}
-
-RECENT CHAT HISTORY:
-${history.slice(-4).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n')}
-
-USER MESSAGE:
-${userMessage}
-
-Respond concisely following the main points only:`;
-
-  let rawReply = '';
-
-  try {
-    switch (config.provider) {
-      case 'gemini': {
-        const apiKey = config.geminiApiKey.trim();
-        if (!apiKey) {
-          return getFastBuiltinResponse(userMessage, currentDSL);
-        }
-        const model = config.geminiModel || 'gemini-2.5-flash';
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: `${BOT_ASSISTANT_SYSTEM_PROMPT}\n\n${promptContext}` }] }],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 800,
-            },
-          }),
-        });
-        if (!res.ok) throw new Error(`Gemini API Error (${res.status})`);
-        const data = await res.json();
-        rawReply = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        break;
-      }
-
-      case 'openai': {
-        const apiKey = config.openaiApiKey.trim();
-        if (!apiKey) {
-          return getFastBuiltinResponse(userMessage, currentDSL);
-        }
-        const baseUrl = (config.openaiBaseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
-        const res = await fetch(`${baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model: config.openaiModel || 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: BOT_ASSISTANT_SYSTEM_PROMPT },
-              { role: 'user', content: promptContext },
-            ],
-            temperature: 0.2,
-            max_tokens: 800,
-          }),
-        });
-        if (!res.ok) throw new Error(`OpenAI API Error (${res.status})`);
-        const data = await res.json();
-        rawReply = data?.choices?.[0]?.message?.content || '';
-        break;
-      }
-
-      case 'claude': {
-        const apiKey = config.claudeApiKey.trim();
-        if (!apiKey) {
-          return getFastBuiltinResponse(userMessage, currentDSL);
-        }
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-          },
-          body: JSON.stringify({
-            model: config.claudeModel || 'claude-3-5-sonnet-20241022',
-            max_tokens: 800,
-            system: BOT_ASSISTANT_SYSTEM_PROMPT,
-            messages: [{ role: 'user', content: promptContext }],
-          }),
-        });
-        if (!res.ok) throw new Error(`Claude API Error (${res.status})`);
-        const data = await res.json();
-        rawReply = data?.content?.[0]?.text || '';
-        break;
-      }
-
-      case 'custom_local':
-      default: {
-        const endpoint = (config.customEndpoint || 'http://127.0.0.1:8088/completion').trim();
-        const isChat = endpoint.includes('/chat/completions');
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (config.customApiKey) headers['Authorization'] = `Bearer ${config.customApiKey.trim()}`;
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-        try {
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers,
-            signal: controller.signal,
-            body: isChat
-              ? JSON.stringify({
-                  model: config.customModel || 'local-model',
-                  messages: [
-                    { role: 'system', content: BOT_ASSISTANT_SYSTEM_PROMPT },
-                    { role: 'user', content: promptContext },
-                  ],
-                  max_tokens: 800,
-                  temperature: 0.2,
-                })
-              : JSON.stringify({
-                  prompt: `<|system|>\n${BOT_ASSISTANT_SYSTEM_PROMPT}\n<|user|>\n${promptContext}\n<|assistant|>\n`,
-                  n_predict: 800,
-                  stop: ['<|end|>', '<|user|>', '</s>'],
-                }),
-          });
-          clearTimeout(timeoutId);
-          if (res.ok) {
-            const data = await res.json();
-            rawReply = data.content || data.response || data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '';
-          } else {
-            return getFastBuiltinResponse(userMessage, currentDSL);
-          }
-        } catch {
-          clearTimeout(timeoutId);
-          return getFastBuiltinResponse(userMessage, currentDSL);
-        }
-        break;
-      }
-    }
-  } catch (err) {
-    console.warn('External LLM error, using fast knowledge fallback:', err);
-    return getFastBuiltinResponse(userMessage, currentDSL);
-  }
-
-  // Clean raw reply of LLM prompt tokens
-  rawReply = (rawReply || '').replace(/<\|[^>]*\|?>/g, '').replace(/<\|+/g, '').replace(/<\/s>/g, '').trim();
-
-  if (!rawReply) {
-    return getFastBuiltinResponse(userMessage, currentDSL);
-  }
-
-  // Extract DSL code if present
-  let generatedDSL: string | undefined;
-  const dslMatch = rawReply.match(/```(?:flowscript|dsl|txt)?\s*([\s\S]*?\[NODES\][\s\S]*?)\s*```/i);
-  if (dslMatch) {
-    generatedDSL = cleanDSLResponse(dslMatch[1]);
-    rawReply = rawReply.replace(/```(?:flowscript|dsl|txt)?\s*([\s\S]*?\[NODES\][\s\S]*?)\s*```/i, '').trim();
-  } else if (rawReply.includes('[NODES]') && rawReply.includes('->')) {
-    const nodesStartIdx = rawReply.indexOf('[NODES]');
-    if (nodesStartIdx !== -1) {
-      generatedDSL = cleanDSLResponse(rawReply.substring(nodesStartIdx));
-      rawReply = rawReply.substring(0, nodesStartIdx).trim();
-    }
-  }
-
-  if (!rawReply && generatedDSL) {
-    rawReply = 'Flowchart berhasil dibuat sesuai permintaan Anda:';
-  }
-
-  return {
-    reply: rawReply,
-    generatedDSL,
-  };
-}
+4. QUALITY RULES:
+   - Remove all markdown syntax from responses (no **, no ###, no •)
+   - Return plain, readable text
+   - If code is returned, make it clean and properly formatted`;
 
 /**
  * Quick ping test for checking LLM connection status
  */
 export async function testLLMConnection(config: LLMConfig): Promise<{ success: boolean; message: string }> {
   try {
-    const testResult = await generateFlowchartWithLLM(
+    const personality = getPersonalityPrompt(config);
+    const testResult = await callLLMProvider(
       'Create a simple diagram: Start -> Process -> End',
-      '',
-      config
+      personality,
+      config,
+      512
     );
     if (testResult && testResult.includes('[NODES]')) {
       return { success: true, message: 'Connection successful! Model responded with valid FlowScript DSL format.' };
@@ -1162,70 +1056,11 @@ RULES:
 
   try {
     const promptWithContext = `USER QUESTION ABOUT THIS CANVAS PROJECT:\n${userQuery}`;
+    const personality = getPersonalityPrompt(currentConfig);
 
-    if (currentConfig.provider === 'gemini' && hasGeminiKey) {
-      const apiKey = currentConfig.geminiApiKey.trim();
-      const model = currentConfig.geminiModel || 'gemini-2.5-flash';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: `${systemPrompt}\n\n${promptWithContext}` }],
-            },
-          ],
-          generationConfig: { temperature: 0.3 },
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return text;
-      }
-    } else if (currentConfig.provider === 'openai' && hasOpenAIKey) {
-      const baseUrl = (currentConfig.openaiBaseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
-      const res = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${currentConfig.openaiApiKey.trim()}`,
-        },
-        body: JSON.stringify({
-          model: currentConfig.openaiModel || 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: promptWithContext },
-          ],
-          temperature: 0.3,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const text = data?.choices?.[0]?.message?.content;
-        if (text) return text;
-      }
-    } else if (currentConfig.provider === 'custom_local' && hasLocal) {
-      const endpoint = currentConfig.customEndpoint.trim();
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: `<|system|>\n${systemPrompt}\n<|user|>\n${promptWithContext}\n<|assistant|>\n`,
-          temperature: 0.3,
-          n_predict: 1500,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const text = data.content || data.response || data.text;
-        if (text) return text;
-      }
+    const result = await callLLMProvider(promptWithContext, systemPrompt, currentConfig, 2048);
+    if (result) {
+      return result;
     }
   } catch (err) {
     console.warn('Detail AI external call failed, fallback to built-in:', err);
@@ -1235,3 +1070,100 @@ RULES:
   return getBuiltinDetailAIAnalysis(userQuery, context);
 }
 
+/**
+ * Saran AI - Suggestion & Recommendation Engine
+ * Provides concrete improvements for flowchart optimization
+ * 
+ * @param flowchartDSL - The flowchart code (not used, generates from context)
+ * @param context - Canvas detail context with nodes and connectors
+ * @param config - LLM configuration
+ * @returns Numbered suggestions for improvement (no repeating chart info)
+ */
+export async function getSaranAI(
+  flowchartDSL: string,
+  context: CanvasDetailContext,
+  config: LLMConfig
+): Promise<string> {
+  const topology = buildCanvasTopologySummary(context);
+  const currentConfig = config || getStoredLLMConfig();
+
+  // Check if external provider is configured
+  const hasGeminiKey = currentConfig.geminiApiKey?.trim();
+  const hasOpenAIKey = currentConfig.openaiApiKey?.trim();
+  const hasClaudeKey = currentConfig.claudeApiKey?.trim();
+  const hasLocal = currentConfig.provider === 'custom_local' && currentConfig.customEndpoint?.trim();
+
+  const systemPrompt = `You are "Saran AI", a specialized improvement recommendation engine for flowchart optimization.
+
+FLOWCHART STRUCTURE:
+${topology.summaryText}
+
+TASK: Provide exactly 3-5 concrete, actionable suggestions to improve this flowchart.
+
+OUTPUT FORMAT: Plain numbered list (1. 2. 3. etc), no markdown, no extra explanation.
+Each suggestion should be 1-2 sentences, specific, and actionable.
+
+FOCUS AREAS:
+- Process efficiency and optimization
+- Error handling and edge cases
+- Flow clarity and path optimization
+- Security and validation checkpoints
+- Performance bottlenecks`;
+
+  try {
+    const prompt = 'Based on the flowchart structure, provide specific improvement suggestions.';
+    const result = await callLLMProvider(prompt, systemPrompt, currentConfig, 1200);
+    return result?.trim() || 'Unable to generate suggestions. Try with a different LLM configuration.';
+  } catch (err: any) {
+    console.error('[getSaranAI] Error:', err);
+    throw new Error(`Saran AI analysis failed: ${err.message}`);
+  }
+}
+
+/**
+ * Nilai AI - Rating & Analysis Engine
+ * Provides structured quality assessment of flowchart
+ * 
+ * @param flowchartDSL - The flowchart code (not used, generates from context)
+ * @param context - Canvas detail context with nodes and connectors
+ * @param config - LLM configuration
+ * @returns Structured analysis with score, strengths, weaknesses (no repeating chart info)
+ */
+export async function getNilaiAI(
+  flowchartDSL: string,
+  context: CanvasDetailContext,
+  config: LLMConfig
+): Promise<string> {
+  const topology = buildCanvasTopologySummary(context);
+  const currentConfig = config || getStoredLLMConfig();
+
+  // Check if external provider is configured
+  const hasGeminiKey = currentConfig.geminiApiKey?.trim();
+  const hasOpenAIKey = currentConfig.openaiApiKey?.trim();
+  const hasClaudeKey = currentConfig.claudeApiKey?.trim();
+  const hasLocal = currentConfig.provider === 'custom_local' && currentConfig.customEndpoint?.trim();
+
+  const systemPrompt = `You are "Nilai AI", a flowchart quality assessment and rating engine.
+
+FLOWCHART STRUCTURE:
+${topology.summaryText}
+
+TASK: Rate and analyze this flowchart comprehensively. Provide concise, actionable feedback.
+
+OUTPUT FORMAT (Plain text, no markdown, no extra explanation):
+QUALITY SCORE: [0-100]
+STRENGTHS: [2-3 aspects, separated by commas]
+WEAKNESSES: [2-3 aspects, separated by commas]
+TOP RECOMMENDATION: [Single most important improvement]
+
+Be direct and specific. No flowchart explanation or repetition.`;
+
+  try {
+    const prompt = 'Provide a quality assessment of this flowchart with score, strengths, weaknesses, and top recommendation.';
+    const result = await callLLMProvider(prompt, systemPrompt, currentConfig, 1000);
+    return result?.trim() || 'Unable to generate assessment. Try with a different LLM configuration.';
+  } catch (err: any) {
+    console.error('[getNilaiAI] Error:', err);
+    throw new Error(`Nilai AI analysis failed: ${err.message}`);
+  }
+}

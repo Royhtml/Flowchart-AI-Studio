@@ -9,7 +9,6 @@ import {
   ChevronDown,
   CheckCircle2,
   AlertCircle,
-  Cpu,
   Zap,
   GripHorizontal,
   Copy,
@@ -17,11 +16,14 @@ import {
   Download,
   Wand2,
   Brain,
+  Flame,
 } from 'lucide-react';
-import { LLMConfig, FlowNode, FlowConnector } from '../types';
+import { LLMConfig } from '../types';
+import { chatWithFlowchartBot } from '../utils/llmService';
 
-// Fast Gemini-style running text effect with glowing beam cursor
-const GeminiTypingText: React.FC<{
+
+// 🎬 Streaming Text Animation
+const StreamingTextAnimation: React.FC<{
   text: string;
   isLatest: boolean;
 }> = ({ text, isLatest }) => {
@@ -38,17 +40,16 @@ const GeminiTypingText: React.FC<{
     setDisplayedChars(0);
     setCompleted(false);
 
-    // Fast streaming running text (steps by 2-3 chars every 10ms like Gemini / ChatGPT)
     const interval = setInterval(() => {
       setDisplayedChars((prev) => {
-        const next = Math.min(prev + 2, text.length);
+        const next = Math.min(prev + 8, text.length);
         if (next >= text.length) {
           clearInterval(interval);
           setCompleted(true);
         }
         return next;
       });
-    }, 10);
+    }, 12);
 
     return () => clearInterval(interval);
   }, [text, isLatest]);
@@ -58,16 +59,14 @@ const GeminiTypingText: React.FC<{
       <div className="text-xs text-slate-100 whitespace-pre-wrap leading-relaxed font-sans">
         {text.slice(0, displayedChars)}
         {!completed && (
-          <span
-            className="inline-block w-1.5 h-3.5 ml-1 rounded-[1px] bg-gradient-to-b from-cyan-400 to-blue-500 shadow-[0_0_8px_rgba(6,182,212,0.9)] animate-pulse align-middle"
-          />
+          <span className="inline-block w-1 h-4 ml-1 rounded-[1px] bg-gradient-to-b from-cyan-400 to-blue-500 shadow-[0_0_12px_rgba(34,197,234,0.8)] animate-pulse align-middle" />
         )}
       </div>
       {!completed && (
-        <div className="mt-1 flex items-center justify-between text-[10px] text-cyan-400/90 font-mono select-none">
+        <div className="mt-1.5 flex items-center justify-between text-[10px] text-cyan-400/90 font-mono select-none">
           <span className="flex items-center gap-1">
             <Sparkles className="w-3 h-3 text-cyan-400 animate-spin" />
-            Gemini Fast Streaming...
+            LLM Streaming...
           </span>
           <button
             type="button"
@@ -77,7 +76,7 @@ const GeminiTypingText: React.FC<{
             }}
             className="text-[10px] text-slate-400 hover:text-cyan-300 underline cursor-pointer"
           >
-            Lewati animasi
+            Selesai
           </button>
         </div>
       )}
@@ -86,8 +85,8 @@ const GeminiTypingText: React.FC<{
 };
 
 interface CanvasAIChatBarProps {
-  onGenerate: (prompt: string) => Promise<void>;
-  isGenerating: boolean;
+  onGenerate?: (prompt: string) => Promise<void>;
+  isGenerating?: boolean;
   llmConfig: LLMConfig;
   onOpenLLMSettings: () => void;
   onOpenCodeEditor: () => void;
@@ -99,23 +98,23 @@ interface CanvasAIChatBarProps {
     id: string;
     role: 'user' | 'assistant';
     content: string;
-    flowchartCode?: string;
     timestamp: number;
+    generatedDSL?: string;
   }>;
   onApplyFlowchart?: (code: string) => void;
 }
 
-const QUICK_PROMPTS = [
-  'Apa fungsi simbol Decision?',
-  'Buatkan flowchart Alur Login & OTP',
-  'Perbedaan Terminator vs Process?',
-  'Buatkan alur Checkout & Pembayaran',
-  'Prinsip dasar standar flowchart',
+// AI Flow Recommendations - topics to ask LLM
+const FLOW_RECOMMENDATIONS = [
+  { icon: '🔐', label: 'Alur Login & OTP', prompt: 'Buatkan flowchart untuk alur login pengguna dengan autentikasi 2FA/OTP' },
+  { icon: '🛒', label: 'E-commerce Checkout', prompt: 'Buatkan flowchart untuk proses checkout dan pembayaran e-commerce' },
+  { icon: '📋', label: 'Approval Workflow', prompt: 'Buatkan flowchart untuk alur persetujuan dokumen / request' },
+  { icon: '🔄', label: 'Data Sync Process', prompt: 'Buatkan flowchart untuk proses sinkronisasi data real-time' },
+  { icon: '⚙️', label: 'API Integration', prompt: 'Buatkan flowchart untuk integrasi dengan external API' },
+  { icon: '📊', label: 'Report Generation', prompt: 'Buatkan flowchart untuk proses generate laporan otomatis' },
 ];
 
 export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
-  onGenerate,
-  isGenerating,
   llmConfig,
   onOpenLLMSettings,
   onOpenCodeEditor,
@@ -128,26 +127,24 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
 }) => {
   const [prompt, setPrompt] = useState('');
   const [isExpanded, setIsExpanded] = useState(true);
-  const [lastGeneratedStatus, setLastGeneratedStatus] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState(chatMessages);
+  const [lastStatus, setLastStatus] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [streamingText, setStreamingText] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [expandedDSL, setExpandedDSL] = useState<string | null>(null);
+  const [glowActive, setGlowActive] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll chat to bottom on new messages
   useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-    }
-  }, [chatMessages, isGenerating]);
+    chatScrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
 
-  // --- Drag logic ---
+  // Drag logic
   const barRef = useRef<HTMLDivElement>(null);
   const dragOrigin = useRef<{ mx: number; my: number; bx: number; by: number } | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
 
-  // Set initial centered position after first render
   useEffect(() => {
     if (position === null && barRef.current) {
       const w = barRef.current.offsetWidth || 600;
@@ -177,50 +174,98 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
 
   const handleDragEnd = useCallback(() => { dragOrigin.current = null; }, []);
 
-  const getProviderLabel = () => {
-    switch (llmConfig.provider) {
-      case 'custom_local': return `Local (${llmConfig.customEndpoint || '127.0.0.1:8088'})`;
-      case 'gemini':       return `Gemini (${llmConfig.geminiModel || '2.5-flash'})`;
-      case 'openai':       return `OpenAI (${llmConfig.openaiModel || 'gpt-4o-mini'})`;
-      case 'claude':       return `Claude (${llmConfig.claudeModel || 'sonnet-4-5'})`;
-    }
-  };
+  const handleSendMessage = async (textToSend?: string) => {
+    const query = (textToSend || prompt).trim();
+    if (!query || isLoading) return;
 
-  const handleSubmit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const cleanPrompt = prompt.trim();
-    if (!cleanPrompt || isGenerating) return;
-    setErrorMessage(null);
-    setLastGeneratedStatus(null);
-    setStreamingText('');
-    setIsStreaming(true);
-    
+    const userMsg = {
+      id: `user-${Date.now()}`,
+      role: 'user' as const,
+      content: query,
+      timestamp: Date.now(),
+    };
+
     try {
-      await onGenerate(cleanPrompt);
-      setLastGeneratedStatus('Flowchart generated & synced!');
-      setPrompt('');
-      setIsStreaming(false);
-      setTimeout(() => setLastGeneratedStatus(null), 4000);
+      setMessages((prev) => [...prev, userMsg]);
+      if (!textToSend) setPrompt('');
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      // Debug logging
+      console.log('[CanvasAIChatBar] Sending message:', query);
+
+      if (!llmConfig) {
+        throw new Error('LLM configuration not available. Please configure LLM settings.');
+      }
+
+      const response = await chatWithFlowchartBot(query, '', messages, llmConfig);
+      
+      if (!response) {
+        throw new Error('Empty response from LLM service');
+      }
+
+      console.log('[CanvasAIChatBar] Response received:', { 
+        hasReply: !!response.reply,
+        hasDSL: !!response.generatedDSL 
+      });
+
+      // Auto-apply generated DSL to canvas if it exists
+      if (response.generatedDSL && onApplyFlowchart) {
+        console.log('[CanvasAIChatBar] Applying DSL to canvas...');
+        try {
+          // Call with error handling
+          onApplyFlowchart(response.generatedDSL);
+          
+          // NEW: Auto-open code editor
+          setTimeout(() => {
+            onOpenCodeEditor();
+          }, 500);
+          
+          // NEW: Add glow animation to UI
+          setGlowActive(true);
+          setTimeout(() => setGlowActive(false), 2500);
+          
+          console.log('[CanvasAIChatBar] DSL applied successfully');
+        } catch (dslErr) {
+          console.error('[CanvasAIChatBar] Failed to apply DSL:', dslErr);
+          // Don't show error - DSL was still generated, just couldn't apply
+          // Let the error show in the next step
+        }
+      }
+      
+      const aiMsg = {
+        id: `assistant-${Date.now()}`,
+        role: 'assistant' as const,
+        content: response.reply || 'No response text available',
+        timestamp: Date.now(),
+        generatedDSL: response.generatedDSL,
+      };
+
+      setMessages((prev) => [...prev, aiMsg]);
+      setLastStatus(response.generatedDSL ? '✓ Flowchart Applied' : 'Response received from LLM');
+      setTimeout(() => setLastStatus(null), 3000);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to generate flowchart.');
-      setIsStreaming(false);
+      const errorMsg = err?.message || 'Failed to get response from LLM';
+      console.error('[CanvasAIChatBar] Error in handleSendMessage:', err);
+      setErrorMessage(errorMsg);
+      
+      // Add error message to chat for visibility
+      setMessages((prev) => [...prev, {
+        id: `error-${Date.now()}`,
+        role: 'assistant' as const,
+        content: `❌ Error: ${errorMsg}`,
+        timestamp: Date.now(),
+      }]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleCopyCode = useCallback((code: string, id: string) => {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    });
-  }, []);
-
-  const handleApplyToCanvas = useCallback((code: string) => {
-    if (onApplyFlowchart) {
-      onApplyFlowchart(code);
-      setLastGeneratedStatus('Applied to canvas!');
-      setTimeout(() => setLastGeneratedStatus(null), 3000);
-    }
-  }, [onApplyFlowchart]);
+  const handleCopyMessage = (id: string, content: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   const posStyle: React.CSSProperties = position !== null
     ? { position: 'fixed', left: position.x, top: position.y, transform: 'none' }
@@ -231,11 +276,15 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
   return (
     <div
       ref={barRef}
-      id="canvas-ai-chat-bar"
+      id="canvas-ai-flow-bar"
       style={posStyle}
       className="z-40 w-[95vw] sm:w-[90vw] max-w-3xl pointer-events-none animate-in fade-in slide-in-from-top-3"
     >
-      <div className="pointer-events-auto bg-slate-900/95 backdrop-blur-xl border border-cyan-500/40 rounded-2xl shadow-2xl shadow-cyan-950/60 overflow-hidden ring-1 ring-white/10">
+      <div className={`pointer-events-auto bg-slate-900/95 backdrop-blur-xl border rounded-2xl shadow-2xl shadow-cyan-950/60 overflow-hidden ring-1 ring-white/10 transition-all duration-300 ${
+        glowActive ? 'border-cyan-400/80 shadow-2xl' : 'border-cyan-500/40 shadow-2xl'
+      }`} style={glowActive ? {
+        boxShadow: '0 0 40px rgba(34,197,234,0.9), 0 0 80px rgba(34,197,234,0.5), inset 0 0 20px rgba(34,197,234,0.2)'
+      } : {}}>
         {/* Error banner */}
         {errorMessage && (
           <div className="px-4 py-2 bg-rose-950/90 border-b border-rose-800/60 text-rose-300 text-xs flex items-center justify-between gap-2">
@@ -243,22 +292,19 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
               <span className="line-clamp-2">{errorMessage}</span>
             </div>
-            <button onClick={() => setErrorMessage(null)} className="text-rose-400 hover:text-white text-xs underline shrink-0 ml-2">Tutup</button>
+            <button onClick={() => setErrorMessage(null)} className="text-rose-400 hover:text-white text-xs underline shrink-0">Tutup</button>
           </div>
         )}
 
         {/* Success banner */}
-        {lastGeneratedStatus && (
-          <div className="px-4 py-1.5 bg-emerald-950/90 border-b border-emerald-800/60 text-emerald-300 text-xs flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 animate-bounce" />
-              <span className="font-medium">{lastGeneratedStatus}</span>
-            </div>
-            <span className="text-[10px] bg-emerald-900/80 px-2 py-0.5 rounded text-emerald-200">Auto-Saved</span>
+        {lastStatus && (
+          <div className="px-4 py-1.5 bg-emerald-950/90 border-b border-emerald-800/60 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 animate-bounce" />
+            <span className="font-medium">{lastStatus}</span>
           </div>
         )}
 
-        {/* ── DRAG HANDLE HEADER ── */}
+        {/* Header */}
         <div
           className="px-3 sm:px-4 py-2 bg-slate-950/70 border-b border-slate-800/80 flex items-center justify-between text-xs gap-2 cursor-grab active:cursor-grabbing select-none"
           onPointerDown={handleDragStart}
@@ -272,18 +318,17 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
 
             <div className="flex items-center gap-1.5 font-semibold text-slate-200 shrink-0">
               <Wand2 className="w-4 h-4 text-cyan-400 animate-pulse" />
-              <span className="hidden xs:inline">AI Flowchart Generator</span>
+              <span className="hidden xs:inline">AI Flow Generator</span>
               <span className="xs:hidden">AI Flow</span>
             </div>
 
-            {/* Provider Pill */}
             <button
               onClick={onOpenLLMSettings}
               className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-medium bg-slate-800/90 hover:bg-slate-700 text-cyan-300 border border-cyan-500/20 transition-colors truncate max-w-[140px] sm:max-w-[200px]"
-              title="Configure AI models"
+              title="Configure LLM Settings"
             >
               <Brain className="w-3 h-3 text-cyan-400 shrink-0" />
-              <span className="truncate">{getProviderLabel()}</span>
+              <span className="truncate">Local LLM</span>
               <Settings className="w-2.5 h-2.5 text-slate-400 ml-0.5 shrink-0" />
             </button>
           </div>
@@ -291,17 +336,17 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <button
               onClick={onOpenCodeEditor}
-              className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/30 transition-colors"
-              title="Open FlowScript Code Editor"
+              className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30 transition-colors"
+              title="Open Code Editor"
             >
-              <Code2 className="w-3 h-3 text-indigo-400" />
+              <Code2 className="w-3 h-3 text-cyan-400" />
               <span>View Code</span>
             </button>
 
             <button
               onClick={() => setIsExpanded(!isExpanded)}
               className="p-1 text-slate-400 hover:text-slate-200 rounded hover:bg-slate-800 transition-colors"
-              title={isExpanded ? 'Kecilkan' : 'Perbesar'}
+              title={isExpanded ? 'Collapse' : 'Expand'}
             >
               {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
@@ -310,7 +355,7 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
               <button
                 onClick={onClose}
                 className="p-1 text-slate-500 hover:text-slate-200 rounded hover:bg-slate-800 transition-colors ml-0.5"
-                title="Sembunyikan"
+                title="Hide"
               >
                 ✕
               </button>
@@ -318,16 +363,16 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
           </div>
         </div>
 
-        {/* ── BODY ── */}
+        {/* Body */}
         {isExpanded && (
           <div className="p-3 space-y-2.5">
-            {/* Chat Messages History */}
-            {chatMessages.length > 0 && (
+            {/* Chat Messages */}
+            {messages.length > 0 && (
               <div
                 ref={chatScrollRef}
                 className="max-h-60 overflow-y-auto space-y-2 mb-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900"
               >
-                {chatMessages.slice(-6).map((msg, idx, arr) => {
+                {messages.slice(-6).map((msg, idx, arr) => {
                   const isLatest = idx === arr.length - 1 && msg.role === 'assistant';
                   return (
                     <div
@@ -339,113 +384,96 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <div className="flex items-center gap-1.5">
-                          {msg.role === 'assistant' ? (
-                            <>
-                              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                              <span className="text-[10px] font-bold text-cyan-300 uppercase tracking-wider">
-                                Flow AI
-                              </span>
-                              <span className="text-[9px] px-1.5 py-0.2 bg-cyan-900/60 border border-cyan-700/50 text-cyan-200 rounded-full font-mono">
-                                Gemini Mode
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-[10px] font-semibold text-slate-300 uppercase tracking-wider">
-                              You
-                            </span>
-                          )}
-                        </div>
+                        <span className="text-[10px] font-bold text-cyan-300 uppercase tracking-wider">
+                          {msg.role === 'assistant' ? 'AI' : 'You'}
+                        </span>
                         <span className="text-[9px] text-slate-400 font-mono">
                           {new Date(msg.timestamp).toLocaleTimeString()}
                         </span>
                       </div>
 
                       {msg.role === 'assistant' ? (
-                        <GeminiTypingText text={msg.content} isLatest={isLatest} />
+                        <StreamingTextAnimation text={msg.content} isLatest={isLatest} />
                       ) : (
                         <div className="text-xs text-slate-200 whitespace-pre-wrap">{msg.content}</div>
                       )}
 
-                      {/* Flowchart Code Block dengan Copy & Apply */}
-                      {msg.flowchartCode && (
-                        <div className="mt-2.5 bg-slate-950/90 border border-cyan-900/50 rounded-lg overflow-hidden shadow-inner">
-                          <div className="px-2.5 py-1 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
-                            <span className="text-[10px] font-mono text-cyan-400 flex items-center gap-1">
-                              <Code2 className="w-3 h-3" />
-                              FlowScript DSL
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => handleCopyCode(msg.flowchartCode!, msg.id)}
-                                className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded transition-colors flex items-center gap-1"
-                                title="Salin kode"
-                              >
-                                {copiedId === msg.id ? (
-                                  <>
-                                    <Check className="w-3 h-3 text-emerald-400" />
-                                    <span className="text-emerald-400">Tersalin</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Copy className="w-3 h-3" />
-                                    <span>Salin</span>
-                                  </>
-                                )}
-                              </button>
-                              {onApplyFlowchart && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleApplyToCanvas(msg.flowchartCode!)}
-                                  className="px-2.5 py-0.5 text-[10px] font-semibold bg-cyan-600 hover:bg-cyan-500 text-white rounded flex items-center gap-1 transition-colors shadow-sm shadow-cyan-900/40"
-                                  title="Terapkan ke canvas"
-                                >
-                                  <Download className="w-3 h-3" />
-                                  Terapkan
-                                </button>
-                              )}
+                      {/* Show generated DSL section if available */}
+                      {msg.role === 'assistant' && msg.generatedDSL && (
+                        <div className="mt-2 pt-2 border-t border-slate-700/50">
+                          <button
+                            onClick={() => setExpandedDSL(expandedDSL === msg.id ? null : msg.id)}
+                            className="flex items-center gap-1.5 text-xs text-emerald-300 hover:text-emerald-200 font-medium transition-colors"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>✓ Flowchart Applied</span>
+                            {expandedDSL === msg.id ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          </button>
+                          
+                          {expandedDSL === msg.id && (
+                            <div className="mt-1.5 p-2 bg-slate-900/80 border border-slate-700 rounded text-[10px] font-mono text-slate-300 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">
+                              {msg.generatedDSL}
                             </div>
-                          </div>
-                          <pre className="p-2 text-[10px] text-slate-300 overflow-x-auto max-h-36 font-mono scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">
-                            <code>{msg.flowchartCode}</code>
-                          </pre>
+                          )}
                         </div>
                       )}
+
+                      <div className="mt-2 pt-2 border-t border-slate-700/50 flex items-center justify-end">
+                        <button
+                          onClick={() => handleCopyMessage(msg.id, msg.content)}
+                          className="text-[10px] text-slate-400 hover:text-cyan-300 flex items-center gap-1 transition-colors"
+                        >
+                          {copiedId === msg.id ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              <span className="text-emerald-400">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             )}
 
-            {/* Quick Prompt Chips */}
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 text-[11px]">
-              <span className="text-slate-500 text-[10px] uppercase font-bold shrink-0 flex items-center gap-1 mr-1">
-                <Zap className="w-3 h-3 text-amber-400" /> Examples:
+            {/* Recommendation Buttons */}
+            <div className="flex flex-col gap-1.5 mb-2">
+              <span className="text-[10px] text-slate-500 uppercase font-bold px-1 flex items-center gap-1">
+                <Flame className="w-3 h-3 text-orange-400" /> AI Flow Recommendations:
               </span>
-              {QUICK_PROMPTS.map((qp, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setPrompt(qp)}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/40 shrink-0 transition-all text-left"
-                >
-                  {qp}
-                </button>
-              ))}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                {FLOW_RECOMMENDATIONS.map((rec, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSendMessage(rec.prompt)}
+                    disabled={isLoading}
+                    className="px-2 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/40 transition-all text-left flex items-start gap-1 disabled:opacity-50 text-[11px]"
+                  >
+                    <span className="text-base leading-none">{rec.icon}</span>
+                    <span className="font-medium line-clamp-2">{rec.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Input */}
-            <form onSubmit={handleSubmit} className="flex items-center gap-2">
+            <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="flex items-center gap-2">
               <div className="relative flex-1">
                 <input
                   type="text"
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  disabled={isGenerating}
-                  placeholder="Describe any workflow, algorithm, or process..."
+                  disabled={isLoading}
+                  placeholder="Describe any flowchart or workflow..."
                   className="w-full pl-3.5 pr-10 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 transition-all disabled:opacity-60"
                 />
-                {prompt && !isGenerating && (
+                {prompt && !isLoading && (
                   <button
                     type="button"
                     onClick={() => setPrompt('')}
@@ -456,16 +484,16 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
 
               <button
                 type="submit"
-                disabled={!prompt.trim() || isGenerating}
+                disabled={!prompt.trim() || isLoading}
                 className={`px-4 py-2.5 rounded-xl font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all shadow-lg shrink-0 ${
-                  isGenerating
+                  isLoading
                     ? 'bg-cyan-950 text-cyan-300 border border-cyan-700/50 cursor-wait'
                     : prompt.trim()
                     ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-900/40 active:scale-95'
                     : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 }`}
               >
-                {isGenerating ? (
+                {isLoading ? (
                   <><Loader2 className="w-4 h-4 animate-spin text-cyan-400" /><span>Generating...</span></>
                 ) : (
                   <><Sparkles className="w-4 h-4 text-cyan-200" /><span className="hidden sm:inline">Generate</span><Send className="w-3.5 h-3.5 sm:hidden" /></>
@@ -476,12 +504,12 @@ export const CanvasAIChatBar: React.FC<CanvasAIChatBarProps> = ({
             {/* Footer info */}
             <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
               <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                Auto-generates, syncs to code editor &amp; auto-saves
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                All responses from Local LLM
               </span>
               <span>
                 Diagram: <strong className="text-slate-400">{nodeCount}</strong> nodes,{' '}
-                <strong className="text-slate-400">{connectorCount}</strong> connectors
+                <strong className="text-slate-400">{connectorCount}</strong> connections
               </span>
             </div>
           </div>

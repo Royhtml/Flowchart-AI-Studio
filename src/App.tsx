@@ -35,7 +35,7 @@ import {
   addCanvasHistorySnapshot,
 } from './utils/canvasHistoryStorage';
 import { LLMConfig } from './types';
-import { getStoredLLMConfig, saveStoredLLMConfig, generateFlowchartWithLLM, chatWithFlowchartBot } from './utils/llmService';
+import { getStoredLLMConfig, saveStoredLLMConfig, generateFlowchartWithAIFlow, chatWithFlowchartBot } from './utils/llmService';
 import { diagramToDSL, dslToDiagram, ParseResult } from './utils/codeSync';
 import {
   speakNodeNarrative,
@@ -1485,10 +1485,27 @@ export default function App() {
   // Apply Flowchart from AI Chat Code to Canvas
   const handleApplyFlowchartFromChat = useCallback(
     (code: string) => {
+      console.log('[App] handleApplyFlowchartFromChat called with DSL length:', code.length);
+      
       try {
+        if (!code || code.trim().length === 0) {
+          console.error('[App] Empty DSL code provided');
+          return;
+        }
+
         const parsed: ParseResult = dslToDiagram(code);
+        
+        console.log('[App] DSL parsing result:', { 
+          success: parsed.success, 
+          nodeCount: parsed.nodes?.length || 0,
+          connectorCount: parsed.connectors?.length || 0,
+          error: parsed.error 
+        });
+
         if (!parsed.success || !parsed.nodes || !parsed.connectors) {
-          throw new Error(parsed.error || 'Invalid FlowScript code format.');
+          console.error('[App] Invalid FlowScript code:', parsed.error);
+          // Don't crash - just don't apply
+          return;
         }
 
         recordHistory();
@@ -1504,27 +1521,33 @@ export default function App() {
 
         // Center viewport
         setTimeout(() => {
-          if (parsed.nodes && parsed.nodes.length > 0) {
-            const bounds = getDiagramBounds(parsed.nodes);
-            const viewportWidth = window.innerWidth - 320 - 256;
-            const viewportHeight = window.innerHeight - 56;
+          try {
+            if (parsed.nodes && parsed.nodes.length > 0) {
+              const bounds = getDiagramBounds(parsed.nodes);
+              const viewportWidth = window.innerWidth - 320 - 256;
+              const viewportHeight = window.innerHeight - 56;
 
-            const scaleX = (viewportWidth - 140) / Math.max(bounds.width, 100);
-            const scaleY = (viewportHeight - 140) / Math.max(bounds.height, 100);
-            const fitZoom = Math.min(1.15, Math.max(0.45, Math.min(scaleX, scaleY)));
+              const scaleX = (viewportWidth - 140) / Math.max(bounds.width, 100);
+              const scaleY = (viewportHeight - 140) / Math.max(bounds.height, 100);
+              const fitZoom = Math.min(1.15, Math.max(0.45, Math.min(scaleX, scaleY)));
 
-            const centerPanX = (viewportWidth - bounds.width * fitZoom) / 2 - bounds.minX * fitZoom;
-            const centerPanY = (viewportHeight - bounds.height * fitZoom) / 2 - bounds.minY * fitZoom;
+              const centerPanX = (viewportWidth - bounds.width * fitZoom) / 2 - bounds.minX * fitZoom;
+              const centerPanY = (viewportHeight - bounds.height * fitZoom) / 2 - bounds.minY * fitZoom;
 
-            setCanvasState((prev) => ({
-              ...prev,
-              zoom: fitZoom,
-              pan: { x: centerPanX, y: centerPanY },
-            }));
+              setCanvasState((prev) => ({
+                ...prev,
+                zoom: fitZoom,
+                pan: { x: centerPanX, y: centerPanY },
+              }));
+            }
+          } catch (panErr) {
+            console.error('[App] Error during viewport centering:', panErr);
+            // Silently continue - canvas is already updated with nodes
           }
         }, 120);
       } catch (err: any) {
-        alert(`Failed to apply flowchart: ${err.message || 'Unknown error'}`);
+        console.error('[App] Error in handleApplyFlowchartFromChat:', err);
+        // Don't crash the entire app - just log the error
       }
     },
     [recordHistory, resetSimulation]

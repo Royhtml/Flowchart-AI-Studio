@@ -52,7 +52,9 @@ import {
 } from 'lucide-react';
 import { StylePresetLibrary } from './StylePresetLibrary';
 import { DetailAIPanel } from './DetailAIPanel';
+import { AIAnalysisPanel } from './AIAnalysisPanel';
 import { chatWithFlowchartBot, BotChatMessage } from '../utils/llmService';
+import { sanitizeMarkdown } from '../utils/textFormatter';
 import { diagramToDSL, dslToDiagram, ParseResult } from '../utils/codeSync';
 import { LLMConfig } from '../types';
 
@@ -387,7 +389,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                       : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs shadow-sm'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  <div className="whitespace-pre-wrap">{sanitizeMarkdown(msg.content)}</div>
 
                   {/* Generated DSL Apply Card */}
                   {msg.generatedDSL && (
@@ -473,12 +475,13 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
           </div>
         </div>
       ) : activeTab === 'detail_ai' ? (
-        /* DETAIL AI CANVAS PROJECT CONSULTANT VIEW */
-        <DetailAIPanel
+        /* DETAIL AI CANVAS PROJECT CONSULTANT VIEW - NEW UNIFIED PANEL */
+        <AIAnalysisPanel
           projectName={projectName}
           nodes={allNodes}
           connectors={allConnectors}
           llmConfig={llmConfig}
+          isOpen={activeTab === 'detail_ai'}
         />
       ) : (
         /* PROPERTIES INSPECTOR VIEW */
